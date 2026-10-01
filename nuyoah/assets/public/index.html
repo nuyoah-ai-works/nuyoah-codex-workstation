@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="zh-CN">
+<head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>资产</title><link rel="stylesheet" href="/ui-v3.css"></head>
+<body>
+<div class="app">
+  <aside class="library-sidebar" aria-label="文件夹导航">
+    <div class="library-heading"><h1>资产</h1><span id="sourceCount"></span></div>
+    <button id="importButton" class="primary">＋ 导入文件夹</button>
+    <button id="taskButton" class="nav-item" aria-pressed="false"><span class="nav-icon">▤</span><span>当前任务</span></button>
+    <div class="sidebar-label">文件夹</div>
+    <nav id="sourceTree" aria-label="已导入的文件夹"></nav>
+    <p id="noSources" class="sidebar-empty">还没有导入文件夹</p>
+  </aside>
+  <section class="workspace" aria-label="资产浏览">
+    <header class="workspace-heading"><div class="heading-text"><p id="contextLabel">本地素材</p><h2 id="libraryTitle">资料库</h2></div><div class="source-actions"><button id="scanButton" disabled>刷新</button><button id="cancelScan" hidden>取消扫描</button><button id="removeButton" disabled>移除</button></div></header>
+    <section class="filters" aria-label="筛选资产">
+      <input id="searchInput" type="search" placeholder="搜索文件名、文件夹或标签" aria-label="搜索资产">
+      <div class="filter-options"><select id="typeSelect" aria-label="文件类型"><option value="">全部格式</option><option value="image">图片</option><option value="video">视频</option><option value="markdown">Markdown</option><option value="code">代码 / JSON</option><option value="document">文本</option><option value="audio">音频</option><option value="pdf">PDF</option><option value="office">Office</option><option value="html">HTML</option><option value="archive">压缩包</option></select><select id="tagSelect" aria-label="标签"><option value="">全部标签</option></select><button id="layoutButton" aria-pressed="false">列表</button><label class="size-control" title="缩略图大小"><span>大小</span><input id="tileSize" aria-label="缩略图大小" type="range" min="100" max="220" step="20" value="140"></label></div>
+    </section>
+    <p id="sourceStatus" role="status"></p><div id="notice" role="status" aria-live="polite" hidden></div>
+    <div class="asset-scroll"><main id="assetGrid" aria-label="资产列表" aria-busy="false"></main><section id="emptyState" class="empty"><div class="empty-symbol">▧</div><h2 id="emptyTitle">导入一个文件夹</h2><p id="emptyText">选择本地文件夹或 Eagle 文件夹。</p><button id="emptyImport" class="primary">导入文件夹</button></section></div>
+    <footer><span id="resultCount">0 个资产</span><div><button id="previousButton" disabled aria-label="上一页">‹</button><span id="pageLabel"></span><button id="nextButton" disabled aria-label="下一页">›</button></div></footer>
+  </section>
+</div>
+<dialog id="importDialog"><form id="importForm"><h2>导入文件夹</h2><label>来源类型<select id="importKind"><option value="folder">本地文件夹</option><option value="eagle">Eagle 文件夹</option></select></label><label><span id="rootLabel">文件夹路径</span><input id="rootInput" required autocomplete="off" placeholder="粘贴文件夹的完整路径"></label><p id="importHelp" class="import-help" hidden>输入 Eagle 资料库的 .library 路径，再读取并选择其中的文件夹。</p><button id="loadEagleFolders" type="button" hidden>读取 Eagle 文件夹</button><label id="eagleFolderLabel" hidden>Eagle 文件夹<select id="eagleFolderSelect"></select></label><label>显示名称（可选）<input id="nameInput" maxlength="100"></label><label id="bindLabel" class="check"><input id="bindProject" type="checkbox" checked>关联当前项目</label><p id="importError" role="alert"></p><div class="actions"><button type="button" data-close="importDialog">取消</button><button id="importSubmit" class="primary">导入</button></div></form></dialog>
+<dialog id="removeDialog"><h2>移除来源</h2><p>从资产列表移除此来源，磁盘上的文件会保留。</p><div class="actions"><button data-close="removeDialog">取消</button><button id="confirmRemove">移除来源</button></div></dialog>
+<dialog id="previewDialog"><div class="preview-heading"><div><span id="previewFormat" class="format-label"></span><h2 id="previewTitle"></h2></div><button data-close="previewDialog" aria-label="关闭预览">关闭</button></div><p id="previewLocation"></p><div id="readingMode" class="reading-mode" hidden><button id="renderedButton" aria-pressed="true">阅读</button><button id="rawButton" aria-pressed="false">原文</button></div><div id="previewStage"></div><p id="previewNote"></p><details id="annotationGroup" hidden><summary>素材说明</summary><pre id="annotation"></pre></details><div class="actions"><button id="copyProfiles" hidden>复制 MJ P 值</button><button id="copyPath">复制文件路径</button><button id="insertPreview" class="primary">插入到任务</button></div></dialog>
+<script type="module" src="/app.js"></script>
+</body></html>

@@ -1,0 +1,4 @@
+interface:
+  display_name: "Codex 任务冷历史"
+  short_description: "保留原任务与续聊上下文，将庞大旧历史完整冷存，需要时检索原话"
+  default_prompt: "使用 $codex-thread-cold-history 检查这个任务的历史加载负担，按原任务保留、旧原文冷存的方式优化。"

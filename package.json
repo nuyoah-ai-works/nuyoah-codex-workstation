@@ -1,0 +1,31 @@
+{
+  "name": "nuyoah-codex-workstation",
+  "version": "0.24.1",
+  "description": "A native-feeling unified project, Taskboard, Skills, and asset workstation embedded in Codex desktop.",
+  "license": "MIT",
+  "keywords": [
+    "codex",
+    "sidebar",
+    "asset-library",
+    "macos",
+    "windows",
+    "productivity"
+  ],
+  "engines": {
+    "node": ">=22.5"
+  },
+  "type": "module",
+  "scripts": {
+    "inspect": "node scripts/inspect-sidebar.mjs",
+    "test": "node --test test/*.test.mjs",
+    "test:taskboard": "node --test test/vendor-taskboard.test.mjs",
+    "doctor": "node scripts/doctor.mjs",
+    "inject": "node scripts/injector.mjs --port 9231 --watch",
+    "runtime": "node scripts/runtime.mjs --port 9231 --watch",
+    "verify:install": "node --test test/install-config.test.mjs test/public-install.test.mjs test/windows-public-install.test.mjs",
+    "verify:workstation": "node scripts/verify-workstation.mjs"
+  },
+  "devDependencies": {
+    "ws": "^8.21.3"
+  }
+}

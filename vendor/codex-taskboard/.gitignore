@@ -1,0 +1,9 @@
+node_modules/
+.data/
+.wrangler/
+.dev.vars*
+.tmp/
+cloud-migration-exports/
+.playwright-cli/
+*.log
+.DS_Store

@@ -1,0 +1,12 @@
+.git/
+.github/
+.runtime/
+.task-description.md
+.task-review.md
+node_modules/
+vendor/**/node_modules/
+output/
+*.log
+codex-*-verification*.png
+codex-conversation-preview-verification.png
+.DS_Store

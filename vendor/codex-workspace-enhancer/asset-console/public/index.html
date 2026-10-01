@@ -1,0 +1,207 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="只在本机运行的文本、图片、音频和视频资产管理平台。">
+  <title>本地资产库</title>
+  <link rel="stylesheet" href="/ui-v3.css">
+</head>
+<body>
+  <div class="app-shell">
+    <aside class="library-sidebar" aria-label="项目管理">
+      <header class="sidebar-brand">
+        <div class="brand-icon" aria-hidden="true">◫</div>
+        <div>
+          <strong>本地资产库</strong>
+          <span>LOCAL ASSET LIBRARY</span>
+        </div>
+        <button id="newProjectButton" class="icon-button" type="button" title="新建项目" aria-label="新建项目">＋</button>
+      </header>
+
+      <div class="sidebar-section-heading">
+        <span>项目</span>
+        <small id="projectCount">0</small>
+      </div>
+      <nav id="localProjectList" class="project-list" aria-label="本地项目"></nav>
+
+      <section id="projectFoldersPanel" class="project-folders-panel" hidden>
+        <div class="sidebar-section-heading">
+          <span>关联文件夹</span>
+          <button id="editProjectButton" class="text-button" type="button">管理</button>
+        </div>
+        <div id="projectFolderList" class="folder-list"></div>
+        <p class="privacy-note"><span aria-hidden="true">●</span> 文件只在本机读取，不会上传。</p>
+      </section>
+    </aside>
+
+    <main class="library-main">
+      <header class="workspace-header">
+        <div class="workspace-title">
+          <span class="eyebrow">ASSET WORKSPACE</span>
+          <div class="title-row">
+            <h1 id="workspaceTitle">选择一个项目</h1>
+            <span id="scanState" class="scan-state">等待扫描</span>
+          </div>
+          <p id="workspaceSubtitle">关联本地文件夹后，系统会自动识别并分类资产。</p>
+        </div>
+        <div class="header-actions">
+          <button id="refreshLibraryButton" type="button" class="secondary-button">↻ 重新扫描</button>
+          <button id="settingsButton" type="button" class="secondary-button">⚙ 设置</button>
+        </div>
+      </header>
+
+      <section class="asset-toolbar" aria-label="资产筛选">
+        <div id="taskContextBar" class="task-context-bar" hidden>
+          <span id="taskContextLabel"></span>
+          <button id="taskContextToggle" type="button" aria-pressed="false">只看当前任务</button>
+        </div>
+        <div class="smart-group-row">
+          <nav id="smartGroupTabs" class="smart-group-tabs" role="tablist" aria-label="智能分组">
+            <button type="button" role="tab" data-smart-group="asset" aria-selected="true" class="active"><span>正式资产</span><small data-smart-count="asset">0</small></button>
+            <button type="button" role="tab" data-smart-group="review" aria-selected="false"><span>待确认</span><small data-smart-count="review">0</small></button>
+            <button type="button" role="tab" data-smart-group="noise" aria-selected="false"><span>干扰项</span><small data-smart-count="noise">0</small></button>
+          </nav>
+          <span class="local-rule-note" title="仅使用文件路径、名称和目录序列密度判断，不调用大模型">本地规则 · 0 Token</span>
+        </div>
+        <nav id="assetKindTabs" class="kind-tabs" aria-label="资产类型">
+          <button type="button" data-asset-kind="all" class="active"><span>全部</span><small data-kind-count="all">0</small></button>
+          <button type="button" data-asset-kind="text"><span>文本</span><small data-kind-count="text">0</small></button>
+          <button type="button" data-asset-kind="image"><span>图片</span><small data-kind-count="image">0</small></button>
+          <button type="button" data-asset-kind="audio"><span>音频</span><small data-kind-count="audio">0</small></button>
+          <button type="button" data-asset-kind="video"><span>视频</span><small data-kind-count="video">0</small></button>
+        </nav>
+        <div class="toolbar-row">
+          <label class="search-box">
+            <span aria-hidden="true">⌕</span>
+            <input id="librarySearchInput" type="search" placeholder="搜索名称、内容、分类或标签" autocomplete="off">
+            <kbd>⌘ K</kbd>
+          </label>
+          <label class="sort-control">排序
+            <select id="librarySortSelect">
+              <option value="newest">最近更新</option>
+              <option value="oldest">最早更新</option>
+              <option value="name">名称</option>
+              <option value="size">文件大小</option>
+            </select>
+          </label>
+          <label class="column-control" title="每行卡片数量">每行
+            <input id="assetColumnRange" type="range" min="1" max="8" value="4">
+            <output id="assetColumnOutput">4</output>
+          </label>
+        </div>
+        <div id="categoryChips" class="category-chips" aria-label="子分类"></div>
+      </section>
+
+      <section class="asset-content">
+        <div id="assetGrid" class="asset-grid" aria-live="polite"></div>
+        <div id="emptyLibraryState" class="empty-state">
+          <div class="empty-icon" aria-hidden="true">◇</div>
+          <h2>这里还没有资产</h2>
+          <p>创建项目并关联一个或多个文件夹，扫描结果会按文本、图片、音频和视频自动归类。</p>
+          <button id="emptyCreateProjectButton" type="button" class="primary-button">创建第一个项目</button>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <dialog id="projectDialog" class="modal project-modal">
+    <form id="projectForm" method="dialog">
+      <header class="modal-header">
+        <div><span class="eyebrow">LOCAL PROJECT</span><h2 id="projectDialogTitle">新建本地项目</h2></div>
+        <button type="button" class="icon-button" data-close-dialog="projectDialog" aria-label="关闭">×</button>
+      </header>
+      <label>项目名称
+        <input id="projectNameInput" type="text" required maxlength="80" placeholder="例如：熔神短剧资产">
+      </label>
+      <label>关联文件夹 <small>每行一个绝对路径，可跨磁盘添加</small>
+        <textarea id="codexNewProjectScanRoots" rows="6" required placeholder="/Users/your-name/Projects/assets"></textarea>
+      </label>
+      <p class="field-hint" data-codex-project-platform-copy>系统会递归扫描这些文件夹，但不会搬动其中的文件。</p>
+      <div id="projectFormError" class="form-error" role="alert"></div>
+      <footer class="modal-actions">
+        <button type="button" class="secondary-button" data-close-dialog="projectDialog">取消</button>
+        <button id="saveProjectButton" type="submit" class="primary-button">保存并扫描</button>
+      </footer>
+    </form>
+  </dialog>
+
+  <dialog id="textViewerDialog" class="modal text-viewer-modal">
+    <div class="text-viewer-shell">
+      <header class="modal-header">
+        <div><span id="textViewerFormat" class="eyebrow">TEXT</span><h2 id="textViewerTitle">文本资产</h2></div>
+        <div class="modal-header-actions">
+          <button id="toggleTextEditButton" type="button" class="secondary-button">编辑</button>
+          <button type="button" class="icon-button" data-close-dialog="textViewerDialog" aria-label="关闭">×</button>
+        </div>
+      </header>
+      <div id="textViewerPreview" class="text-viewer-preview"></div>
+      <textarea id="textViewerEditor" class="text-viewer-editor" hidden spellcheck="false"></textarea>
+      <footer class="modal-actions">
+        <span id="textSaveState" class="save-state"></span>
+        <button id="saveTextButton" type="button" class="primary-button" hidden>保存到原文件</button>
+      </footer>
+    </div>
+  </dialog>
+
+  <dialog id="assetActionDialog" class="modal action-modal">
+    <form id="assetActionForm" method="dialog">
+      <header class="modal-header">
+        <div><span class="eyebrow">ASSET ACTION</span><h2 id="assetActionTitle">管理资产</h2></div>
+        <button type="button" class="icon-button" data-close-dialog="assetActionDialog" aria-label="关闭">×</button>
+      </header>
+      <div id="assetActionFields"></div>
+      <div id="assetActionError" class="form-error" role="alert"></div>
+      <footer class="modal-actions">
+        <button type="button" class="secondary-button" data-close-dialog="assetActionDialog">取消</button>
+        <button id="confirmAssetAction" type="submit" class="primary-button">确认</button>
+      </footer>
+    </form>
+  </dialog>
+
+  <dialog id="mediaPreviewDialog" class="modal media-preview-modal">
+    <div class="media-preview-shell">
+      <header class="modal-header">
+        <div><span id="mediaPreviewFormat" class="eyebrow">MEDIA</span><h2 id="mediaPreviewTitle">资产预览</h2></div>
+        <button type="button" class="icon-button" data-close-dialog="mediaPreviewDialog" aria-label="关闭">×</button>
+      </header>
+      <div id="mediaPreviewLayout" class="media-preview-layout">
+        <section id="mediaPreviewStage" class="media-preview-stage" aria-label="资产内容"></section>
+        <aside id="mediaPromptPanel" class="media-prompt-panel" aria-label="关联提示词" hidden>
+          <div class="prompt-panel-heading"><span class="eyebrow">LINKED PROMPT</span><h3>关联提示词</h3></div>
+          <div id="mediaPromptMeta" class="prompt-meta"></div>
+          <section class="prompt-section"><h4>正向提示词</h4><div id="mediaPromptText" class="prompt-content"></div></section>
+          <section id="mediaNegativePromptGroup" class="prompt-section"><h4>负向提示词 / 约束</h4><div id="mediaNegativePromptText" class="prompt-content"></div></section>
+          <section id="mediaPromptReferences" class="prompt-section prompt-references"></section>
+        </aside>
+      </div>
+    </div>
+  </dialog>
+
+  <dialog id="settingsDialog" class="modal settings-modal">
+    <form id="settingsForm" method="dialog">
+      <header class="modal-header">
+        <div><span class="eyebrow">LIBRARY SETTINGS</span><h2>资产库设置</h2></div>
+        <button type="button" class="icon-button" data-close-dialog="settingsDialog" aria-label="关闭">×</button>
+      </header>
+      <section>
+        <h3>标签管理</h3>
+        <p>标签会成为所有资产卡片中的可选项。</p>
+        <div id="tagManager" class="tag-manager"></div>
+        <div class="inline-add"><input id="newTagInput" type="text" placeholder="新增标签"><button id="addTagButton" type="button">添加</button></div>
+      </section>
+      <section>
+        <h3>子分类</h3>
+        <div id="taxonomyManager" class="taxonomy-manager"></div>
+      </section>
+      <footer class="modal-actions">
+        <button type="button" class="secondary-button" data-close-dialog="settingsDialog">取消</button>
+        <button type="submit" class="primary-button">保存设置</button>
+      </footer>
+    </form>
+  </dialog>
+
+  <div id="toastRegion" class="toast-region" aria-live="polite"></div>
+  <script type="module" src="/app.js"></script>
+</body>
+</html>

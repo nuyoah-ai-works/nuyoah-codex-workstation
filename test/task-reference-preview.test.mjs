@@ -1,0 +1,24 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { mkdtemp, writeFile, rm } from 'node:fs/promises';
+import os from 'node:os';
+import path from 'node:path';
+import { TaskContextStore, handleTaskContextRequest } from '../nuyoah/workstation/task-context-store.mjs';
+const id = '11111111-1111-4111-8111-111111111111';
+test('previews require a visible task-owned reference, recheck existence and preserve stored revisions', async t => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'task-preview-')); t.after(() => rm(root, { recursive: true, force: true }));
+  const store = new TaskContextStore(root), file = path.join(root, 'output.html'), other = path.join(root, 'unrelated.txt');
+  await writeFile(file, '<script>never execute</script>'); await writeFile(other, 'unrelated');
+  const request = file => ({ id: 'preview', threadId: id, action: 'preview', path: file });
+  assert.ok((await handleTaskContextRequest(store, request(other))).error);
+  await store.update(id, { section: 'references', revision: 0, value: [{ path: file, relation: 'output' }] });
+  const result = await handleTaskContextRequest(store, request(file));
+  assert.equal(result.preview.text, '<script>never execute</script>');
+  assert.equal((await store.read(id)).revision, 1);
+  const auto = { view: async () => ({ references: [{ path: other, exists: true }] }) };
+  assert.equal((await handleTaskContextRequest(store, request(other), null, null, auto)).preview.text, 'unrelated');
+  await store.update(id, { section: 'excludedReferencePaths', revision: 1, value: [other] });
+  assert.ok((await handleTaskContextRequest(store, request(other), null, null, auto)).error);
+  await rm(file);
+  assert.ok((await handleTaskContextRequest(store, request(file))).error);
+});
