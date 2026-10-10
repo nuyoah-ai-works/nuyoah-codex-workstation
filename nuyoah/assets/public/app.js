@@ -354,7 +354,15 @@ for(const b of document.querySelectorAll('[data-close]'))b.onclick=()=>$(b.datas
 window.addEventListener('message',event=>run(async()=>{
   if(event.source!==window.parent||event.data?.source!=='codex-sidebar-enhancer')return;const m=event.data;
   if(m.action==='context') {
-    if(!m.threadId)return;
+    if(!m.threadId) {
+      if(m.clearTask!==true)return;
+      state.context={hostId:'local',threadId:'',threadTitle:'',projectId:m.projectId||'',projectName:m.projectName||''};
+      ++state.selection;++state.request;state.controller?.abort();state.loading=false;closePreview();
+      $('assetGrid').setAttribute('aria-busy','false');
+      if(state.scope==='task'){state.assets=[];state.total=0;state.offset=0;}
+      paint();
+      paintSources();return;
+    }
     const followTask=state.scope==='task';
     const projectChanged=state.context.projectId!==(m.projectId||''),threadChanged=state.context.threadId!==(m.threadId||''),hostChanged=state.context.hostId!==(m.hostId||'local');
     state.context={hostId:m.hostId||'local',...Object.fromEntries(['threadId','threadTitle','projectId','projectName'].map(key=>[key,m[key]||'']))};

@@ -14,6 +14,18 @@ Nuyoah-specific changes must be documented below and should prefer the
 
 ## Local changes
 
+- Draft folders 0.26: Nuyoah's per-pane chooser reads the host's imported native
+  project metadata and passes the selected project identity and cwd to its
+  first-turn composer. Project metadata follows the chosen draft. No OS dialog,
+  disk scan, project registration, filesystem creation, messages or upstream
+  version changes accompany this choice.
+
+- Grid/workstation linking 0.25: native client draft identities allow each pane to
+  start a new conversation without creating or sending a task ahead of the user.
+  Project and vendor Taskboard entry patches select the active pane directly and
+  use its current-task context; explicit empty-pane context clears task assets.
+  Native scopes, connections, permissions and pinned vendor versions are retained.
+
 - Central multi-chat 0.22: Nuyoah adapters mount up to four selected local native
   conversations with the existing host React runtime and native per-thread,
   route and composer initialization. The central grid, resizing, focus and

@@ -4,14 +4,14 @@
 
 它保留中间的原生对话，把项目上下文、Taskboard、当前可调用 Skills 和本地资产统一放进右侧工作站；左侧仍由 Codex 原生项目与任务导航承担。用户只需要一个“工作站”入口，不需要在多个独立工具间来回切换。
 
-当前版本：**0.24.1**。公开源码：[nuyoah-ai-works/nuyoah-codex-workstation](https://github.com/nuyoah-ai-works/nuyoah-codex-workstation)。更新记录见 [CHANGELOG.md](./CHANGELOG.md)。
+当前版本：**0.26.0**。公开源码：[nuyoah-ai-works/nuyoah-codex-workstation](https://github.com/nuyoah-ai-works/nuyoah-codex-workstation)。更新记录见 [CHANGELOG.md](./CHANGELOG.md)。
 
 自 2026-09-02 起，本仓库是唯一现役产品线。旧 Swift Sidecar 已只读归档到
 `<archive-root>/Nuyoah Codex Workspace Swift/2026-09-02/`，不再用于开发、安装或运行。
 
 ## 已实现的第一条完整链路
 
-- 中央聊天支持四宫格：选择最多四个本机或已配置远程设备的 Codex 对话，独立输入与滚动；拖动边界联动调整大小，支持单格放大、恢复比例与返回单聊。复用宿主原生组件与任务连接，兼容性失败时恢复单聊。
+- 中央聊天支持四宫格：每格可独立新建会话、选择会话工作文件夹，或打开本机、已配置远程设备的已有对话，独立输入与滚动；工作站跟随当前选中格，任务卡直接进入该格。拖动边界调整大小，支持单格放大、恢复比例与返回单聊。复用宿主原生组件与任务连接，兼容性失败时恢复单聊。
 - 项目三页采用轻工具栏与按需详情：任务地图占据主视区，当前项目突出摘要和最近产出，工作事项保持简洁画布；浅深色和字号设置跟随宿主。
 - 事项库为空时保留创建入口，不再自动灌入项目历史任务。
 

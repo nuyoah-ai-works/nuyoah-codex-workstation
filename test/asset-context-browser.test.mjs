@@ -33,6 +33,10 @@ test('current-task assets follow project changes, retain the filter and recover 
     assert.equal(await page.locator('#taskButton').getAttribute('aria-pressed'), 'true');
     await context(null); await page.waitForTimeout(100);
     assert.equal(await page.locator('#sourceStatus').textContent(), 'Fixture-1');
+    await page.evaluate(() => window.postMessage({source:'codex-sidebar-enhancer',action:'context',clearTask:true},'*'));
+    await page.waitForFunction(() => document.querySelectorAll('.asset-card').length === 0);
+    assert.equal(await page.locator('#taskButton').getAttribute('aria-pressed'), 'true');
+    assert.notEqual(await page.locator('#sourceStatus').textContent(), 'Fixture-1');
     await context(0, 'fixture-project-a'); await page.locator('.card-title').filter({ hasText: 'fixture-0.md' }).waitFor();
     const taskRequests = []; page.on('request', r => { const u = new URL(r.url()); if (u.pathname === '/api/assets' && u.searchParams.get('scope') === 'task') taskRequests.push(u.searchParams.get('hostId')); });
     await context(0, 'fixture-project-a', 'remote-fixture'); await page.getByText('远程任务资产暂不可用', { exact: true }).waitFor();

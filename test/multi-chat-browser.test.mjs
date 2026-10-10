@@ -12,10 +12,11 @@ function html({ remote = false } = {}) {
     window.tasks=${JSON.stringify(ids.map((threadId, i) => ({ hostId: 'local', threadId, title: '示例对话 ' + (i + 1) })))};
     if(${remote})tasks.push({hostId:'remote-fixture',threadId:tasks[0].threadId,title:'远程同ID示例',hostName:'验证 Mac'},{hostId:'remote-fixture',threadId:tasks[1].threadId,title:'远程离线示例',hostName:'验证 Mac'});
     window.remoteAvailable=true;
-    window.current=tasks[0];window.mounts=[];window.disposals=[];window.sent=[];window.pending=[];window.shouldDelay=false;window.captures=0;
+    window.current=tasks[0];window.mounts=[];window.disposals=[];window.sent=[];window.pending=[];window.shouldDelay=false;window.captures=0;window.paneCallbacks=new Map();
     window.__nuyoahRemoteTaskCatalog__={snapshot:()=>tasks};
     window.__codexConversationPreviewInjection__={openMultiChatTask:t=>{window.current=t;return true}};
-    window.adapter={current:()=>{window.captures++;return window.current},prepare:async()=>{},mount:async(container,target,callbacks)=>{
+    window.adapter={newTarget:()=>({hostId:'local',clientThreadId:'client-new-thread:'+crypto.randomUUID(),title:'新会话'}),current:()=>{window.captures++;return window.current},prepare:async()=>{},mount:async(container,target,callbacks)=>{
+      paneCallbacks.set(target.clientThreadId||target.threadId,callbacks);
       if(target.hostId!=='local'&&(!remoteAvailable||!tasks.some(t=>t.hostId===target.hostId)))throw Object.assign(new Error('Fixture device unavailable'),{code:'remote_unavailable'});
       const mount=()=>{const el=document.createElement('div');el.className='sample-native';const scroll=document.createElement('div');scroll.className='sample-scroll';for(let i=0;i<50;i++){const p=document.createElement('p');p.textContent='示例消息 '+i;scroll.append(p)}const input=document.createElement('textarea');input.setAttribute('aria-label','草稿 '+target.threadId);input.addEventListener('pointerdown',()=>input.focus(),true);const send=document.createElement('button');send.textContent='发送';send.onclick=()=>sent.push({target,text:input.value});el.append(scroll,input,send);container.append(el);mounts.push(target.threadId);callbacks.onReady();return{dispose(){disposals.push(target.threadId);container.replaceChildren()}}};
       if(window.shouldDelay)return new Promise(resolve=>pending.push(()=>resolve(mount())));return mount();
@@ -23,6 +24,47 @@ function html({ remote = false } = {}) {
     window.ui=(${createMultiChatUI.toString()})({window,adapter});
   </script></body></html>`;
 }
+test('each pane opens its own native draft, workstation selection targets the active pane and creation retains its editor', { skip: !process.env.NUYOAH_PLAYWRIGHT_MODULE, timeout: 60000 }, async () => {
+  const { chromium } = await import(process.env.NUYOAH_PLAYWRIGHT_MODULE);
+  const server = createServer((request, response) => { response.writeHead(200, { 'content-type': 'text/html;charset=utf-8' }); response.end(html()); }); let browser;
+  try {
+    await new Promise(resolve => server.listen(0, '127.0.0.1', resolve)); browser = await chromium.launch({ executablePath: process.env.NUYOAH_TEST_BROWSER, headless: true });
+    const page = await browser.newPage({ viewport: { width: 1400, height: 1000 } }); page.setDefaultTimeout(5000);
+    await page.goto('http://127.0.0.1:' + server.address().port); await page.evaluate(() => ui.open());
+    await page.waitForFunction(() => ui.snapshot().slots[0].loaded);
+    await page.locator('[data-slot="0"] textarea').fill('原任务草稿');
+    for (const index of [1, 2, 3]) {
+      await page.getByRole('button', { name: '区域 ' + (index + 1) + ' 新建会话', exact: true }).click();
+      await page.waitForFunction(index => ui.snapshot().slots[index].loaded, index);
+      await page.locator('[data-slot="' + index + '"] textarea').fill('新会话草稿 ' + index);
+    }
+    const drafts = await page.evaluate(() => ui.snapshot().slots.slice(1).map(s => s.target.clientThreadId));
+    assert.equal(new Set(drafts).size, 3); assert.equal(await page.evaluate(() => sent.length), 0);
+    assert.equal(await page.locator('[data-slot="0"] textarea').inputValue(), '原任务草稿');
+    await page.evaluate(() => { ui.swap(1, 3); ui.activate(3); });
+    assert.equal(await page.locator('[data-slot="3"] textarea').inputValue(), '新会话草稿 1');
+    const mounts = await page.evaluate(() => window.mounts.length);
+    await page.evaluate(id => paneCallbacks.get(ui.currentTarget().clientThreadId).onTarget({ hostId: 'local', threadId: id }), ids[1]);
+    assert.equal(await page.evaluate(() => window.mounts.length), mounts);
+    assert.equal(await page.evaluate(() => ui.currentTarget().threadId), ids[1]);
+    assert.equal(await page.locator('[data-slot="3"] textarea').inputValue(), '新会话草稿 1');
+    await page.evaluate(() => { ui.activate(2); ui.selectTask(tasks[2]); });
+    await page.waitForFunction(id => ui.snapshot().slots[2].target.threadId === id && ui.snapshot().slots[2].loaded, ids[2]);
+    assert.equal(await page.locator('[data-slot="3"] textarea').inputValue(), '新会话草稿 1');
+    await page.evaluate(id => paneCallbacks.get(id).onTarget({ hostId: 'local', threadId: tasks[3].threadId }), drafts[1]);
+    assert.equal(await page.evaluate(() => ui.snapshot().slots[2].target.threadId), ids[2]);
+    await page.evaluate(ids => { paneCallbacks.get(ids[1]).onFolder({hostId:'local',projectId:'stale',cwd:'/synthetic/stale-folder'}); paneCallbacks.get(ids[2]).onFolder({hostId:'local',projectId:'selected',cwd:'/synthetic/selected-folder'}); }, drafts);
+    assert.equal(await page.evaluate(() => ui.snapshot().slots[2].target.cwd), undefined);
+    const saved = await page.evaluate(() => JSON.parse(localStorage.getItem('nuyoah:chat-grid-layout-v1')));
+    assert.equal(saved.targets[1].clientThreadId, drafts[2]); assert.equal(JSON.stringify(saved).includes('草稿'), false);
+    assert.equal(saved.targets[1].cwd, '/synthetic/selected-folder');
+    assert.equal(saved.targets[1].projectId, 'selected');
+    await page.reload(); await page.waitForFunction(() => ui.snapshot().slots.every(s => s.loaded));
+    assert.equal(await page.evaluate(() => ui.snapshot().slots[1].target.clientThreadId), drafts[2]);
+    assert.equal(await page.evaluate(() => ui.snapshot().slots[1].target.cwd), '/synthetic/selected-folder');
+    assert.equal(await page.evaluate(() => ui.snapshot().slots[1].target.projectId), 'selected');
+  } finally { await browser?.close(); await new Promise(resolve => server.close(resolve)); }
+});
 test('four-chat layout preserves independent content, focus, targets and roots through resizing and restoration', { skip: !process.env.NUYOAH_PLAYWRIGHT_MODULE, timeout: 120000 }, async () => {
   const { chromium } = await import(process.env.NUYOAH_PLAYWRIGHT_MODULE);
   const server = createServer((request, response) => { response.writeHead(200, { 'content-type': 'text/html;charset=utf-8' }); response.end(html()); });

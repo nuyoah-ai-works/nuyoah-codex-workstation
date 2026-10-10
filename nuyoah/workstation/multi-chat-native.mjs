@@ -2,6 +2,9 @@
 export function createNativeMultiChatAdapter({ window: host, loadModule } = {}) {
   const error = () => new Error('当前版本暂时无法打开四宫格，请继续使用单聊。');
   const uuid = value => typeof value === 'string' && /^[a-f\d]{8}(?:-[a-f\d]{4}){3}-[a-f\d]{12}$/i.test(value);
+  const draft = value => typeof value === 'string' && value.startsWith('client-new-thread:') && uuid(value.slice(18));
+  const directory = value => typeof value === 'string' && value.length < 4096 && !/[\0\r\n]/.test(value)
+    && (value.startsWith('/') || /^[a-z]:[\\/]/i.test(value) || /^\\\\[^\\]+\\/.test(value));
   let modules;
   let pageType;
   let lastFailure = null;
@@ -90,7 +93,7 @@ export function createNativeMultiChatAdapter({ window: host, loadModule } = {}) 
     })().catch(() => { modules = null; throw error(); });
     return modules;
   }
-  function capture() {
+  function capture(discoverComposer = false) {
     const area = Array.from(host.document.querySelectorAll?.('[data-app-shell-main-content-layout]') || [])
       .find(node => { const r = node.getBoundingClientRect(); return r.width > 100 && r.height > 100 && !node.closest('#nuyoah-chat-grid, [hidden]'); });
     const visible = node => {
@@ -132,7 +135,7 @@ export function createNativeMultiChatAdapter({ window: host, loadModule } = {}) 
       if (isPage(fiber)) {
           let ancestor = fiber.return;
           while (ancestor && ancestor.memoizedProps?.scope?.__scopeBrand !== 'RouteScope') ancestor = ancestor.return;
-          if (ancestor?.memoizedProps?.value?.routeKind === 'local-thread') {
+          if (['local-thread', 'client-local-thread'].includes(ancestor?.memoizedProps?.value?.routeKind)) {
             let node = fiber.child;
             const children = [node];
             while (children.length) {
@@ -163,24 +166,67 @@ export function createNativeMultiChatAdapter({ window: host, loadModule } = {}) 
         providers.push({ type: fiber.type, value: props.value });
       }
     }
-    if (!wrapper || scopes.size !== 3 || !uuid(scopes.get('RouteScope').value?.conversationId)
+    const route = scopes.get('RouteScope')?.value;
+    if (!wrapper || scopes.size !== 3 || !(uuid(route?.conversationId) || draft(route?.clientThreadId))
       || !hostInfo(scopes.get('RouteScope').value.hostId || 'local').known) throw error();
-    return { scopes, providers, wrapper, route: scopes.get('RouteScope').value };
+    // The native timeline composer waits for an existing server task. New panes
+    // use the host's first-turn composer instead, including its project picker.
+    const composers = new Set(), children = discoverComposer ? [page.child] : [], visited = new Set();
+    while (children.length && visited.size < 20000) {
+      const fiber = children.pop(); if (!fiber || visited.has(fiber)) continue;
+      visited.add(fiber);
+      if (typeof fiber.type === 'function') {
+        const text = Function.prototype.toString.call(fiber.type);
+        if (text.length < 2000 && text.includes('useAsbDirect===!0')) composers.add(fiber.type);
+      }
+      if (fiber.child) children.push(fiber.child); if (fiber.sibling) children.push(fiber.sibling);
+    }
+    return { scopes, providers, wrapper, route: scopes.get('RouteScope').value,
+      NewComposer: composers.size === 1 ? [...composers][0] : null };
   }
   function current() {
-    try { const { route } = capture(); return { hostId: route.hostId || 'local', threadId: route.conversationId }; }
+    try { const { route } = capture(); return { hostId: route.hostId || 'local', ...(uuid(route.conversationId)
+      ? { threadId: route.conversationId } : { clientThreadId: route.clientThreadId }) }; }
     catch { return null; }
   }
-  async function mount(container, target, { onError = () => {}, onReady = () => {} } = {}) {
-    if (!target?.hostId || !uuid(target.threadId) || !container?.isConnected) throw error();
+  function newTarget() { return { hostId: 'local', clientThreadId: 'client-new-thread:' + host.crypto.randomUUID(), title: '新会话' }; }
+  function importedFolders() {
+    const folders = new Map(), rows = Array.from(host.document.querySelectorAll?.('[data-app-action-sidebar-project-row]') || []);
+    const add = (projectId, name, paths, hostId = 'local') => {
+      const cwd = (Array.isArray(paths) ? paths : []).find(directory);
+      if (typeof projectId !== 'string' || !projectId || projectId.length > 512 || !cwd || !hostInfo(hostId).known) return;
+      folders.set(hostId + ':' + projectId, { projectId, name: String(name || cwd.split(/[\\/]/).pop()).slice(0, 180), cwd, hostId });
+    };
+    const bootstrap = host.electronBridge?.getInitialSidebarBootstrap?.()?.globalStateEntries || [];
+    const projects = bootstrap.find(entry => entry.key === 'local-projects')?.value || {};
+    if (!rows.length) for (const [id, project] of Object.entries(projects)) add(id, project?.name, project?.rootPaths);
+    for (const row of rows) {
+      const id = row.getAttribute('data-app-action-sidebar-project-id');
+      const name = row.getAttribute('data-app-action-sidebar-project-label');
+      let fiber = row[Object.keys(row).find(key => key.startsWith('__reactFiber'))], matched = false;
+      for (let depth = 0; fiber && depth < 18; depth++, fiber = fiber.return) {
+        const group = fiber.memoizedProps?.group;
+        if (group?.projectId !== id) continue;
+        if (!['local', 'remote'].includes(group.projectKind)) { matched = true; break; }
+        add(id, group.label || name, [group.path, ...(group.rootPaths || [])], group.projectKind === 'remote' ? group.hostId : 'local');
+        matched = true; break;
+      }
+      if (!matched && projects[id]) add(id, name || projects[id].name, projects[id].rootPaths);
+    }
+    return [...folders.values()];
+  }
+  async function mount(container, target, { onError = () => {}, onReady = () => {}, onTarget = () => {}, onFolder = () => {} } = {}) {
+    const pending = !target?.threadId && target?.hostId === 'local' && draft(target?.clientThreadId);
+    if (!target?.hostId || !(uuid(target.threadId) || pending) || !container?.isConnected) throw error();
     if (!hostInfo(target.hostId).available) throw unavailable();
     const { React, ReactDOM, Page, useScope } = await runtime();
     if (!container.isConnected) throw error();
-    const { wrapper, scopes, providers } = capture();
+    const { wrapper, scopes, providers, NewComposer } = capture(pending);
+    if (pending && !NewComposer) throw error();
     // Persistent workspace sessions must never override a pane's selected task.
-    const route = { routeKind: 'local-thread', routeTemplate: '/local/:conversationId',
-      conversationId: target.threadId, hostId: target.hostId === 'local' ? null : target.hostId,
-      pathname: '/local/' + target.threadId,
+    const route = { routeKind: pending ? 'client-local-thread' : 'local-thread', routeTemplate: '/local/:conversationId',
+      ...(pending ? { clientThreadId: target.clientThreadId } : { conversationId: target.threadId }), hostId: target.hostId === 'local' ? null : target.hostId,
+      pathname: '/local/' + (target.threadId || target.clientThreadId),
       search: target.hostId === 'local' ? '' : '?' + new URLSearchParams({ hostId: target.hostId }), projectContext: null };
     let disposed = false;
     let failed = false;
@@ -201,14 +247,47 @@ export function createNativeMultiChatAdapter({ window: host, loadModule } = {}) 
     function Ready() { React.useEffect(() => { if (!disposed) onReady(); }, []); return null; }
     function ScopedChat() {
       const thread = useScope(scopes.get('ThreadScope').scope), nativeRoute = useScope(scopes.get('RouteScope').scope), composer = scopes.get('ComposerScope');
-      if (nativeRoute.value.conversationId !== target.threadId || (nativeRoute.value.hostId || 'local') !== target.hostId
-        || thread.value.routeConversationId !== target.threadId) {
+      const [folders, setFolders] = React.useState(() => pending ? importedFolders() : []);
+      const [projectId, setProjectId] = React.useState(target.projectId || '');
+      const folder = folders.find(folder => folder.hostId === 'local' && folder.projectId === projectId);
+      const changeProject = selected => {
+        const fresh = importedFolders();
+        const next = fresh.find(folder => folder.hostId === 'local' && folder.projectId === selected?.projectId) || null;
+        setFolders(fresh);
+        setProjectId(next?.projectId || '');
+        if (next) { target.cwd = next.cwd; target.projectId = next.projectId; } else { delete target.cwd; delete target.projectId; }
+        onFolder(next);
+      };
+      const conversationId = nativeRoute.value.conversationId || null, hostId = nativeRoute.value.hostId || 'local';
+      if (pending ? thread.value.clientThreadId !== target.clientThreadId || !hostInfo(hostId).known
+        : conversationId !== target.threadId || hostId !== target.hostId || thread.value.routeConversationId !== target.threadId) {
         throw new Error('Native conversation identity mismatch');
       }
-      const value = { ...composer.value, clientThreadId: thread.value.clientThreadId,
-        conversationId: target.threadId, routeConversationId: target.threadId, browserTabMentionConversationId: null };
+      React.useEffect(() => { if (!disposed && pending && uuid(conversationId)) onTarget({ hostId, threadId: conversationId }); }, [conversationId, hostId]);
+      // Native local first-turn composers retain drafts by client identity;
+      // home composers persist a shared home draft even with separate focus keys.
+      const value = pending && !conversationId ? { kind: 'local', placement: 'side', clientThreadId: target.clientThreadId,
+        conversationId: null, routeConversationId: null, browserTabMentionConversationId: target.clientThreadId } : { ...composer.value, clientThreadId: thread.value.clientThreadId,
+        conversationId, routeConversationId: conversationId, browserTabMentionConversationId: null };
+      const content = pending && !conversationId ? React.createElement('div', {
+        style: { display: 'flex', flexDirection: 'column', justifyContent: 'flex-end', flex: 1, minHeight: 0 },
+      }, React.createElement('label', { style: { display: 'flex', alignItems: 'center', gap: 8, padding: '8px 12px', minWidth: 0 } }, '文件夹',
+        React.createElement('select', { 'aria-label': '会话所在文件夹', value: projectId, title: folder?.cwd || '选择 Codex 已导入的文件夹',
+          style: { flex: 1, width: '100%', minWidth: 0 },
+          onFocus: () => setFolders(importedFolders()),
+          onChange: event => {
+            if (disposed) return;
+            changeProject({ projectId: event.target.value });
+          },
+        }, React.createElement('option', { value: '' }, folders.length ? '选择已导入的文件夹' : '请先在 Codex 导入文件夹'),
+        ...folders.map(folder => React.createElement('option', { key: folder.hostId + ':' + folder.projectId, value: folder.projectId,
+          disabled: folder.hostId !== 'local' }, folder.name + (folder.hostId !== 'local' ? ' · 远程（暂不支持新会话）' : '')))),
+        projectId && !folder ? React.createElement('span', { role: 'status' }, '原文件夹已移除，请重新选择。') : null),
+      React.createElement(NewComposer, { surfacePlacement: { kind: 'home', isCodexHome: true }, disableAutoFocus: true,
+        defaultCwd: folder?.cwd, selectedProject: folder ? { type: 'local', projectId: folder.projectId } : null,
+        onProjectChange: changeProject, submitDisabled: !!projectId && !folder })) : React.createElement(Page);
       return React.createElement(composer.type, { scope: composer.scope, value },
-        React.createElement(Boundary, null, React.createElement(Page), React.createElement(Ready)));
+        React.createElement(Boundary, null, content, React.createElement(Ready)));
     }
     // The host resolves a separate client-new-thread identity for each stored
     // conversation. Reuse its wrapper rather than treating server IDs as client IDs.
@@ -221,10 +300,10 @@ export function createNativeMultiChatAdapter({ window: host, loadModule } = {}) 
       tree = React.createElement(provider.type, { value }, tree);
     }
     const prefix = Array.from(target.hostId, char => /^[a-z\d-]$/i.test(char) ? char : '_' + char.codePointAt(0).toString(16) + '_').join('');
-    const root = ReactDOM.createRoot(container, { identifierPrefix: 'nuyoah-' + prefix + '-' + target.threadId + '-',
+    const root = ReactDOM.createRoot(container, { identifierPrefix: 'nuyoah-' + prefix + '-' + (target.threadId || target.clientThreadId.slice(18)) + '-',
       onUncaughtError: report, onCaughtError: report });
     root.render(tree);
     return { dispose() { if (!disposed) { disposed = true; root.unmount(); } }, target: { ...target } };
   }
-  return { current, mount, hostInfo, prepare: runtime, diagnostic: () => lastFailure };
+  return { current, mount, newTarget, importedFolders, hostInfo, prepare: runtime, diagnostic: () => lastFailure };
 }

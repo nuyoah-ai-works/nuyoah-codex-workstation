@@ -18,12 +18,12 @@ function composer(ids, { width = 700, height = 120, display = 'flex', visibility
     // Native metadata markers can be hidden even when their owning composer is visible.
     querySelectorAll: () => ids.map(id => ({ ...element({ 'data-above-composer-conversation-id': id }), hidden: true })) };
 }
-function context({ active = null, roots = [], rows = [], local = [], recent = [], current = [], remote = [], hasLocalThread = () => false, grid = null } = {}) {
+function context({ active = null, roots = [], rows = [], local = [], recent = [], current = [], remote = [], hasLocalThread = () => false, grid = null, folders = [] } = {}) {
   const read = vm.runInNewContext(`(${code})`, {
     document: { querySelector: () => active, querySelectorAll: selector => selector.startsWith('[data-codex-composer-root]') ? roots.filter(root => root.placement === 'thread') : rows },
     getComputedStyle: node => node.style, normalizedThreadId: value => String(value || '').trim().replace(/^(?:local|cloud):/i, '').toLowerCase(),
     searchCatalogByThread: new Map(local.map(entry => [entry.threadId, entry])), recentCatalogByThread: new Map(recent.map(entry => [entry.threadId, entry])), taskCatalog: current,
-    window: { __nuyoahRemoteTaskCatalog__: { snapshot: () => remote, hasLocalThread }, __nuyoahMultiChat__: grid },
+    window: { __nuyoahRemoteTaskCatalog__: { snapshot: () => remote, hasLocalThread }, __nuyoahMultiChat__: grid, __nuyoahMultiChatNative__: { importedFolders: () => folders } },
   });
   return JSON.parse(JSON.stringify(read()));
 }
@@ -33,6 +33,37 @@ test('the selected grid pane owns workstation context while native navigation ca
   const result = context({ active: row(a, 'local', 'Other task'), grid, local: [{ threadId: b, projectId: 'chosen', projectName: 'Chosen project' }] });
   assert.equal(result.threadId, b); assert.equal(result.threadTitle, 'Selected pane'); assert.equal(result.projectId, 'chosen');
   assert.deepEqual(context({ active: row(a, 'local'), grid: { isOpen: () => true, currentTarget: () => null } }), empty);
+  assert.deepEqual(context({ active: row(a, 'local'), grid: { isOpen: () => true, currentTarget: () => ({ hostId: 'local', clientThreadId: 'client-new-thread:' + b }) } }), empty);
+  const draft = { hostId: 'local', clientThreadId: 'client-new-thread:' + b, projectId: 'selected-folder', cwd: '/synthetic/folder' };
+  const folders = [{ hostId: 'local', projectId: draft.projectId, cwd: draft.cwd, name: '选中文件夹' }];
+  assert.deepEqual(context({ active: row(a, 'local'), folders, grid: { isOpen: () => true, currentTarget: () => draft } }),
+    { threadId: '', hostId: 'local', threadTitle: '', projectId: draft.projectId, projectName: '选中文件夹' });
+  assert.deepEqual(context({ folders, grid: { isOpen: () => true, currentTarget: () => ({ ...draft, cwd: '/synthetic/other' }) } }), empty);
+});
+
+test('Taskboard uses grid context and opens local or remote cards directly into its active pane', async () => {
+  const vendor = readFileSync(new URL('../vendor/codex-taskboard/inject/codex-taskboard.user.js', import.meta.url), 'utf8');
+  const start = vendor.indexOf('  function readHostContext('), end = vendor.indexOf('\n  function postToFrame(', start);
+  let selected = { threadId: b, hostId: 'remote:fixture', projectId: 'chosen' }, allowed = true;
+  const opened = [], tasks = [{ hostId: 'remote:fixture', threadId: b, title: '远程示例' }];
+  const environment = {
+    activeThreadRow: () => row(a, 'local'), normalizeThreadId: value => value, pendingSelectedThreadId: () => '',
+    lastNativeThreadId: a, findThreadRow: () => row(a, 'local'), threadIdFromLocation: () => '', workspaceFromLocation: () => '/synthetic/old-project',
+    currentTheme: () => 'light', readCodexProjects: () => [], readCodexUser: () => null, titlebarLeftInset: () => 0, nativeSidebarCollapsed: () => false,
+    document: { querySelector: () => null }, location: { pathname: '/local/' + a },
+    window: { __nuyoahMultiChat__: { isOpen: () => true, selectTask: target => { opened.push(target); return allowed; } },
+      __codexConversationPreviewInjection__: { currentTaskContext: () => selected, getTaskboardSnapshot: () => ({ version: 1, tasks }) }, setTimeout() {} },
+    postHostContext() {}, REATTACH_DELAY_MS: 100,
+  };
+  const read = vm.runInNewContext('(' + vendor.slice(start, end).trim() + ')', environment);
+  assert.equal(read().threadId, b); assert.equal(read().hostId, 'remote:fixture'); assert.equal(read().projectId, 'chosen');
+  assert.equal(read().workspacePath, undefined);
+  selected = empty; assert.equal(read().threadId, undefined); assert.equal(read().projectId, undefined); assert.equal(read().hostId, '');
+  const openStart = vendor.indexOf('  async function openThread(');
+  const open = vm.runInNewContext('(' + vendor.slice(openStart, vendor.indexOf('\n  function projectRowById(', openStart)).trim() + ')', environment);
+  assert.equal(await open(b, 'remote:fixture'), true); assert.equal(opened[0], tasks[0]);
+  assert.equal(await open(a), true); assert.equal(opened[1].threadId, a);
+  allowed = false; assert.equal(await open(b, 'remote:fixture'), false);
 });
 
 test('native active identity keeps precedence and its existing local default', () => {

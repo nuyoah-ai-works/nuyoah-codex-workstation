@@ -615,6 +615,13 @@
     payload.hostId = row?.getAttribute('data-app-action-sidebar-thread-host-id') || 'local';
     const chatId = location.pathname.match(/^\/(?:g\/[^/]+\/)?c\/([a-f\d-]{36})(?:\/|$)/i)?.[1]?.toLowerCase();
     if (chatId) { payload.threadId = chatId; payload.hostId = 'chatgpt'; delete payload.projectId; delete payload.workspacePath; }
+    if (window.__nuyoahMultiChat__?.isOpen?.()) {
+      const context = window.__codexConversationPreviewInjection__?.currentTaskContext?.();
+      delete payload.threadId; delete payload.projectId; delete payload.workspacePath;
+      payload.hostId = context?.hostId || '';
+      if (context?.threadId) payload.threadId = context.threadId;
+      if (context?.projectId) payload.projectId = context.projectId;
+    }
     return payload;
   }
 
@@ -664,6 +671,12 @@
       dispatchHostMessage({ type: 'navigate-to-route', path: `/c/${encodeURIComponent(normalizedThreadId)}` });
       window.setTimeout(postHostContext, REATTACH_DELAY_MS);
       return true;
+    }
+    if (window.__nuyoahMultiChat__?.isOpen?.()) {
+      const task = window.__codexConversationPreviewInjection__?.getTaskboardSnapshot?.()?.tasks
+        ?.find(task => task.hostId === hostId && normalizeThreadId(task.threadId) === normalizedThreadId);
+      const opened = window.__nuyoahMultiChat__.selectTask(task || { hostId, threadId: normalizedThreadId });
+      postHostContext(); window.setTimeout(postHostContext, REATTACH_DELAY_MS); return opened;
     }
     if (hostId !== "local") {
       const nativeRow = Array.from(document.querySelectorAll('[data-app-action-sidebar-thread-id]'))

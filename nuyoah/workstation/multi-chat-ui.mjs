@@ -1,6 +1,14 @@
 export function createMultiChatUI({ window: host, adapter, storage = host.localStorage } = {}) {
   const doc = host.document, key = 'nuyoah:chat-grid-layout-v1';
   const uuid = value => typeof value === 'string' && /^[a-f\d]{8}(?:-[a-f\d]{4}){3}-[a-f\d]{12}$/i.test(value);
+  const draft = target => target?.hostId === 'local' && !target.threadId && typeof target.clientThreadId === 'string'
+    && target.clientThreadId.startsWith('client-new-thread:') && uuid(target.clientThreadId.slice(18));
+  const validTarget = target => validHost(target?.hostId) && (uuid(target.threadId) || draft(target));
+  const directory = value => typeof value === 'string' && value.length < 4096 && !/[\0\r\n]/.test(value)
+    && (value.startsWith('/') || /^[a-z]:[\\/]/i.test(value) || /^\\\\[^\\]+\\/.test(value));
+  const storedTarget = target => target ? { hostId: target.hostId, ...(draft(target)
+    ? { clientThreadId: target.clientThreadId, ...(directory(target.cwd) && typeof target.projectId === 'string' && target.projectId.length < 512
+      ? { cwd: target.cwd, projectId: target.projectId } : {}) } : { threadId: target.threadId }) } : null;
   const validHost = value => typeof value === 'string' && value.length > 0 && value.length < 512
     && !/[\0\r\n]/.test(value) && !value.startsWith('chatgpt') && value !== 'durable';
   let saved;
@@ -8,8 +16,8 @@ export function createMultiChatUI({ window: host, adapter, storage = host.localS
   const selected = new Set();
   let targets = Array.from({ length: 4 }, (_, index) => {
     const target = saved?.targets?.[index];
-    if (!validHost(target?.hostId) || !uuid(target.threadId) || selected.has(identity(target))) return null;
-    selected.add(identity(target)); return { hostId: target.hostId, threadId: target.threadId };
+    if (!validTarget(target) || selected.has(identity(target))) return null;
+    selected.add(identity(target)); return { ...storedTarget(target), ...(draft(target) ? { title: '新会话' } : {}) };
   });
   const ratio = value => Number.isFinite(value) ? Math.min(.8, Math.max(.2, value)) : .5;
   const state = { open: false, suspended: false, active: Number.isInteger(saved?.active) && saved.active >= 0 && saved.active < 4 ? saved.active : 0,
@@ -35,8 +43,8 @@ export function createMultiChatUI({ window: host, adapter, storage = host.localS
   }
   function node(tag, className, text) { const el = doc.createElement(tag); if (className) el.className = className; if (text) el.textContent = text; return el; }
   function button(label, action) { const el = node('button', '', label); el.type = 'button'; el.onclick = action; return el; }
-  function identity(target) { return target && target.hostId + ':' + target.threadId; }
-  function pickerValue(target) { return target?.hostId === 'local' ? target.threadId : JSON.stringify([target.hostId, target.threadId]); }
+  function identity(target) { return target && target.hostId + ':' + (target.threadId || target.clientThreadId); }
+  function pickerValue(target) { return target?.hostId === 'local' ? target.threadId || target.clientThreadId : JSON.stringify([target.hostId, target.threadId]); }
   function deviceName(target) { return target.hostId === 'local' ? '本机' : target.hostName || adapter.hostInfo?.(target.hostId)?.name || '远程设备'; }
   function catalog() {
     const tasks = new Map();
@@ -133,7 +141,7 @@ export function createMultiChatUI({ window: host, adapter, storage = host.localS
     resizeTimer = host.setTimeout(() => { resizeTimer = null; sync(); }, 120);
   }
   function save() {
-    if (slots.length) targets = slots.map(slot => slot.target ? { hostId: slot.target.hostId, threadId: slot.target.threadId } : null);
+    if (slots.length) targets = slots.map(slot => storedTarget(slot.target));
     try { storage.setItem(key, JSON.stringify({ x: state.x, y: state.y, active: state.active, targets, open: state.open })); } catch {}
   }
   function suspend() {
@@ -144,7 +152,7 @@ export function createMultiChatUI({ window: host, adapter, storage = host.localS
     host.__codexConversationPreviewInjection__?.refresh?.();
   }
   function navigate(target) {
-    if (!target || identity(adapter.current()) === identity(target)) return;
+    if (!target || draft(target) || identity(adapter.current()) === identity(target)) return;
     navigating = { id: identity(target), until: Date.now() + 5000 };
     host.__codexConversationPreviewInjection__?.openMultiChatTask?.(target);
   }
@@ -166,6 +174,7 @@ export function createMultiChatUI({ window: host, adapter, storage = host.localS
       const current = slot.target ? pickerValue(slot.target) : '';
       slot.picker.replaceChildren();
       const empty = node('option', '', '选择对话'); empty.value = ''; slot.picker.append(empty);
+      if (draft(slot.target)) { const option = node('option', '', '新会话 · 本机'); option.value = pickerValue(slot.target); slot.picker.append(option); }
       for (const task of tasks) {
         const option = node('option', '', task.title + ' · ' + deviceName(task)); option.value = pickerValue(task);
         option.disabled = slots.some(other => other !== slot && identity(other.target) === identity(task))
@@ -179,14 +188,14 @@ export function createMultiChatUI({ window: host, adapter, storage = host.localS
   async function bind(index, target, { select = true, reload = false } = {}) {
     const slot = slots[index];
     if (!slot || !state.open) return;
-    if (target && (!validHost(target.hostId) || !uuid(target.threadId))) { feedback('请选择本机或已配置远程设备的 Codex 对话。'); return; }
+    if (target && !validTarget(target)) { feedback('请选择本机或已配置远程设备的 Codex 对话。'); return; }
     const existing = target && slots.find(other => other !== slot && identity(other.target) === identity(target));
     if (existing) { activate(existing.index); updatePickers(); return; }
     if (!reload && identity(slot.target) === identity(target)) { if (select) activate(index); return; }
     const generation = ++slot.generation;
     slot.session?.dispose(); slot.session = null; slot.target = target; slot.body.replaceChildren();
     delete slot.el.dataset.loaded;
-    slot.status.textContent = target ? '正在打开…' : '选择一个对话';
+    slot.status.textContent = target ? '正在打开…' : '新建会话，或选择已有对话';
     slot.expand.disabled = !target;
     if (select) activate(index, false);
     updatePickers();
@@ -197,6 +206,19 @@ export function createMultiChatUI({ window: host, adapter, storage = host.localS
       const session = await adapter.mount(mountNode, target, {
         onReady: () => { if (state.open && slots[slot.index] === slot && slot.generation === generation) { slot.status.textContent = ''; slot.el.dataset.loaded = 'true'; } },
         onError: () => { if (state.open && slots[slot.index] === slot && slot.generation === generation) close('这个版本暂时无法显示独立对话，已恢复单聊。'); },
+        onFolder: folder => {
+          if (!state.open || slots[slot.index] !== slot || slot.generation !== generation || !draft(slot.target)) return;
+          if (folder && (folder.hostId !== 'local' || !directory(folder.cwd) || typeof folder.projectId !== 'string' || folder.projectId.length >= 512)) return;
+          if (folder) { slot.target.cwd = folder.cwd; slot.target.projectId = folder.projectId; }
+          else { delete slot.target.cwd; delete slot.target.projectId; }
+          save(); host.__codexConversationPreviewInjection__?.refresh?.();
+        },
+        onTarget: next => {
+          if (!state.open || slots[slot.index] !== slot || slot.generation !== generation || !validTarget(next) || draft(next)) return;
+          slot.target = { ...next, title: '新会话' }; updatePickers(); save();
+          if (state.active === slot.index) navigate(slot.target);
+          host.__codexConversationPreviewInjection__?.refresh?.();
+        },
       });
       if (!state.open || slots[slot.index] !== slot || slot.generation !== generation) { session.dispose(); return; }
       slot.session = session;
@@ -209,6 +231,15 @@ export function createMultiChatUI({ window: host, adapter, storage = host.localS
         slot.expand.disabled = true;
       } else close('四宫格暂时无法打开，已恢复单聊。');
     }
+  }
+  function newChat(index) {
+    if (!slots[index] || !state.open) return;
+    try { return bind(index, adapter.newTarget()); }
+    catch { feedback('新会话暂时无法打开，请稍后重试。'); }
+  }
+  function selectTask(target) {
+    if (!state.open || state.suspended || !validTarget(target)) return false;
+    void bind(state.active, target); return true;
   }
   function expand(index) {
     activate(index, false);
@@ -249,6 +280,7 @@ export function createMultiChatUI({ window: host, adapter, storage = host.localS
       slot.el.setAttribute('aria-label', '对话区域 ' + (index + 1));
       slot.picker.setAttribute('aria-label', '区域 ' + (index + 1) + ' 的对话');
       slot.handle.setAttribute('aria-label', '交换区域 ' + (index + 1) + ' 的位置');
+      slot.create.setAttribute('aria-label', '区域 ' + (index + 1) + ' 新建会话');
     }
     state.active = active.index;
     if (state.expanded != null) { Object.assign(state, state.beforeExpand); state.expanded = null; }
@@ -339,8 +371,9 @@ export function createMultiChatUI({ window: host, adapter, storage = host.localS
       picker.onchange = () => void bind(slot.index, catalog().find(task => pickerValue(task) === picker.value) || null);
       const expandButton = button('放大', () => expand(slot.index)); expandButton.disabled = true;
       slot.handle = swapHandle(slot);
-      head.append(slot.handle, picker, expandButton, button('移除', () => void bind(slot.index, null)));
-      const status = node('div', 'nuyoah-chat-grid-slot-status', '选择一个对话'); status.setAttribute('role', 'status');
+      slot.create = button('新建会话', () => void newChat(slot.index)); slot.create.setAttribute('aria-label', '区域 ' + (index + 1) + ' 新建会话');
+      head.append(slot.handle, picker, slot.create, expandButton, button('移除', () => void bind(slot.index, null)));
+      const status = node('div', 'nuyoah-chat-grid-slot-status', '新建会话，或选择已有对话'); status.setAttribute('role', 'status');
       const body = node('div', 'nuyoah-chat-grid-native');
       el.append(head, status, body); el.addEventListener('pointerdown', event => {
         activate(slot.index, false);
@@ -367,6 +400,7 @@ export function createMultiChatUI({ window: host, adapter, storage = host.localS
     updatePickers(); save();
   }
   function close(message = '') {
+    const activeTarget = slots[state.active]?.target;
     cancelFocusRequest();
     if (layoutFrame != null) host.cancelAnimationFrame(layoutFrame); layoutFrame = null;
     cancelSwap(); restoreOpen = false;
@@ -374,6 +408,10 @@ export function createMultiChatUI({ window: host, adapter, storage = host.localS
     for (const slot of slots) { slot.generation++; slot.session?.dispose(); }
     slots = []; resizeObserver?.disconnect(); resizeObserver = null;
     view?.remove(); view = null; area = null; restoreSource(); entry?.setAttribute('aria-expanded', 'false');
+    if (!destroyed && !message && activeTarget) {
+      if (!draft(activeTarget)) navigate(activeTarget);
+    }
+    if (!destroyed) host.__codexConversationPreviewInjection__?.refresh?.();
     if (message) feedback(message);
     if (!destroyed) entry?.focus();
   }
@@ -445,7 +483,7 @@ export function createMultiChatUI({ window: host, adapter, storage = host.localS
   host.addEventListener('resize', resize); doc.addEventListener('keydown', keydown, true);
   doc.addEventListener('pointerdown', cancelFocusRequest, true);
   const interval = host.setInterval(sync, 800);
-  return { open, close, bind, activate, swap, sync, isOpen: () => state.open && !state.suspended, currentTarget: () => state.open && !state.suspended ? slots[state.active]?.target || null : null,
+  return { open, close, bind, activate, swap, sync, newChat, selectTask, isOpen: () => state.open && !state.suspended, currentTarget: () => state.open && !state.suspended ? slots[state.active]?.target || null : null,
     composer: () => state.open && !state.suspended ? slots[state.active]?.body.querySelector('[contenteditable="true"]') || null : null,
     snapshot: () => ({ open: state.open && !state.suspended, suspended: state.suspended, active: state.active, x: state.x, y: state.y,
     slots: slots.map(slot => ({ target: slot.target, loaded: slot.el.dataset.loaded === 'true' })) }),

@@ -2940,17 +2940,17 @@
     const context = currentCodexTaskContext();
     const tasks = getTaskboardSnapshot({ includeProjectHistory: true }).tasks;
     const entry = tasks.find(task => task.threadId === context.threadId && task.hostId === context.hostId) || null;
-    const selected = !context.threadId && activeFolderId !== ALL_FOLDER_ID ? folderSources.get(activeFolderId) : null;
+    const selected = !context.threadId && !window.__nuyoahMultiChat__?.isOpen?.() && activeFolderId !== ALL_FOLDER_ID ? folderSources.get(activeFolderId) : null;
     if (selected) {
       context.projectId = selected.id; context.projectName = selected.label;
       context.hostId = tasks.find(task => task.projectId === selected.id)?.hostId
         || (selected.folder?.getAttribute('data-sidebar-project-kind') === 'remote' ? 'remote:pending' : 'local');
     }
     const projectId = entry?.projectId || context.projectId || '';
-    const projectName = entry?.projectName || context.projectName || (context.hostId !== 'local' ? '项目同步中' : '未绑定项目');
+    const projectName = entry?.projectName || context.projectName || (context.hostId && context.hostId !== 'local' ? '项目同步中' : '未绑定项目');
     const entries = projectId && projectId !== '__unassigned__'
       ? tasks.filter(task => task.projectId === projectId && task.hostId === context.hostId) : entry ? [entry] : [];
-    return { context, entry, projectId, projectName, entries, tasks, pendingProject: context.hostId !== 'local' && !entry };
+    return { context, entry, projectId, projectName, entries, tasks, pendingProject: Boolean(context.hostId && context.hostId !== 'local' && !entry) };
   }
 
   function saveProjectPosition() {
@@ -3029,9 +3029,10 @@
     return initializeWorkspacePanel(page, 'project');
   }
 
-  function openProjectTask(entry, body, { returning = false } = {}) {
+  function openProjectTask(entry, body, { returning = false, fromGrid = false } = {}) {
     const threadId = normalizedThreadId(entry?.threadId);
     if (!/^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/.test(threadId) || !entry?.hostId) return false;
+    if (!fromGrid && window.__nuyoahMultiChat__?.isOpen?.()) return window.__nuyoahMultiChat__.selectTask({ ...entry, threadId });
     // A child view can leave the parent's sidebar row selected. Explicitly route
     // back instead of clicking that already-selected row, which may be a no-op.
     const remoteHost = entry.hostId === 'local' ? null : window.__nuyoahMultiChatNative__?.hostInfo?.(entry.hostId);
@@ -3274,6 +3275,11 @@
     if (window.__nuyoahMultiChat__?.isOpen?.()) {
       const target = window.__nuyoahMultiChat__.currentTarget();
       const threadId = normalizedThreadId(target?.threadId || '');
+      if (target?.hostId === 'local' && /^client-new-thread:[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/i.test(target.clientThreadId || '')) {
+        const project = window.__nuyoahMultiChatNative__?.importedFolders?.().find(project => project.hostId === 'local'
+          && project.projectId === target.projectId && project.cwd === target.cwd);
+        if (project) return { threadId: '', hostId: 'local', threadTitle: '', projectId: project.projectId, projectName: project.name };
+      }
       if (!target?.hostId || !/^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/.test(threadId))
         return { threadId: '', hostId: '', threadTitle: '', projectId: '', projectName: '' };
       const entry = target.hostId === 'local' ? searchCatalogByThread.get(threadId) || recentCatalogByThread.get(threadId)
@@ -3354,10 +3360,11 @@
   function syncAssetConsoleContext(force = false) {
     if (!assetConsoleFrame?.isConnected || assetConsolePage?.hidden || assetConsolePage?.dataset.state !== 'ready') return;
     const context = currentCodexTaskContext();
-    if (!context.threadId || !context.hostId) return;
+    if ((!context.threadId || !context.hostId) && !window.__nuyoahMultiChat__?.isOpen?.()) return;
     const signature = JSON.stringify(context);
     if (!force && assetConsoleFrame.__nuyoahContextSignature === signature) return;
-    assetConsoleFrame.contentWindow?.postMessage({ source: "codex-sidebar-enhancer", action: "context", ...context }, "*");
+    assetConsoleFrame.contentWindow?.postMessage({ source: "codex-sidebar-enhancer", action: "context", ...context,
+      clearTask: window.__nuyoahMultiChat__?.isOpen?.() === true && !context.threadId }, "*");
     assetConsoleFrame.__nuyoahContextSignature = signature;
   }
 
@@ -6707,7 +6714,8 @@
     openSkillsGrouping,
     openAssetConsolePanel,
     openWorkstationPanel,
-    openMultiChatTask: entry => openProjectTask(entry, null, { returning: true }),
+    openMultiChatTask: entry => openProjectTask(entry, null, { returning: true, fromGrid: true }),
+    currentTaskContext: currentCodexTaskContext,
     routeWorkspaceCommand,
   };
   if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", start, { once: true });

@@ -45,7 +45,15 @@ private paths, or perform real file deletion from this layer.
   conversation components using the existing AppScope and native per-thread,
   route and composer providers, keyed by host and thread identity. Only the native
   component may display a selected remote conversation over the existing connection;
-  this adapter never reads or caches its body. Persist only host/thread layout choices.
+  this adapter never reads or caches its body. Each pane may open a user-requested
+  local native client draft; only the user's native send creates the task. Adopt the
+  native creation identity without remounting, and discard stale identity callbacks.
+  Persist only host/thread or native client-draft identities, explicitly selected
+  imported project identities, local draft working directories and layout choices.
+  Read only imported native sidebar/project metadata for this chooser; never open
+  a system directory dialog or scan the disk. Stale choices must preserve the
+  selected pane. No project registration, directory creation or message submission
+  accompanies this choice.
   Remote tasks must never be resolved by local asset or session services. Never create an execution runtime, copy bodies,
   inspect credentials or persist messages. Resizing must not remount components;
   failed or stale mounts must clean up and preserve the original native page.

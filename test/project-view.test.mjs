@@ -81,10 +81,14 @@ test('new-task project view follows the selected folder, while an existing task 
  const source = await readFile(new URL('../inject/conversation-preview.user.js', import.meta.url), 'utf8');
  const code = source.slice(source.indexOf('  function currentProjectSnapshot()'), source.indexOf('\n  function saveProjectPosition()'));
  const tasks = [{threadId:'one',hostId:'local',projectId:'p',projectName:'Selected'}, {threadId:'two',hostId:'local',projectId:'q',projectName:'Actual'}];
- const sandbox = {currentCodexTaskContext:()=>({threadId:'',hostId:'local'}),getTaskboardSnapshot:()=>({tasks}),activeFolderId:'p',ALL_FOLDER_ID:'all',folderSources:new Map([['p',{id:'p',label:'Selected'}]])};
+ const sandbox = {window:{},currentCodexTaskContext:()=>({threadId:'',hostId:'local'}),getTaskboardSnapshot:()=>({tasks}),activeFolderId:'p',ALL_FOLDER_ID:'all',folderSources:new Map([['p',{id:'p',label:'Selected'}]])};
  vm.createContext(sandbox);vm.runInContext(code,sandbox);
  let snapshot = vm.runInContext('currentProjectSnapshot()',sandbox);
  assert.equal(snapshot.projectName,'Selected');assert.equal(snapshot.entries.length,1);
+ sandbox.window.__nuyoahMultiChat__={isOpen:()=>true};sandbox.currentCodexTaskContext=()=>({threadId:'',hostId:''});
+ snapshot=vm.runInContext('currentProjectSnapshot()',sandbox);
+ assert.equal(snapshot.projectId,'');assert.equal(snapshot.projectName,'未绑定项目');assert.equal(snapshot.pendingProject,false);
+ delete sandbox.window.__nuyoahMultiChat__;
  sandbox.currentCodexTaskContext=()=>({threadId:'two',hostId:'local'});
  snapshot=vm.runInContext('currentProjectSnapshot()',sandbox);
  assert.equal(snapshot.projectId,'q');assert.equal(snapshot.entries[0].threadId,'two');
