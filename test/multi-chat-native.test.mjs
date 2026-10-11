@@ -4,7 +4,7 @@ import { createNativeMultiChatAdapter } from '../nuyoah/workstation/multi-chat-n
 
 const ids = ['00000000-0000-4000-8000-000000000001', '00000000-0000-4000-8000-000000000002'];
 function fixture({ remote = false, broken = false, hiddenFirst = false, offline = false } = {}) {
-  const rendered = [], disposed = [], calls = [], states = [], projectRows = [];
+  const rendered = [], disposed = [], calls = [], states = [], projectRows = [], bindings = [];
   const projects = { a: { name: '文件夹甲', rootPaths: ['/synthetic/project-a'] }, b: { name: '文件夹乙', rootPaths: ['/synthetic/project-b'] } };
   let renderIndex = 0, hookIndex = 0;
   const React = { Component: class {}, createElement: (type, props, ...children) => ({ type, props, children }), useEffect(effect) { effect(); },
@@ -24,7 +24,7 @@ function fixture({ remote = false, broken = false, hiddenFirst = false, offline 
   const provider = { tag: 10, type: { displayName: 'AppScope' }, memoizedProps: { value: new Map() } };
   const wrapper = { type: NativeWrapper, memoizedProps: { route: { routeKind: 'local-thread' } }, return: provider };
   scopes.forEach((scope, index) => { scope.return = scopes[index + 1] || wrapper; });
-  const fiber = { type: Page, return: scopes[0], child: { tag: 5, stateNode: { getBoundingClientRect: () => ({ width: 100, height: 100 }), closest: () => null }, child: { type: NewComposer } } };
+  const fiber = { type: Page, return: scopes[0], child: { tag: 5, stateNode: { getBoundingClientRect: () => ({ width: 100, height: 100 }), closest: () => null }, child: { type: NewComposer, sibling: { memoizedProps: { model: 'fixture-a', reasoningEffort: 'medium', models: ['fixture-a','fixture-b'].map(model => ({model,displayName:model,supportedReasoningEfforts:[{reasoningEffort:'medium'},{reasoningEffort:'high'}],defaultReasoningEffort:'medium'})), modelOptions: [], onSelectModel() {} } } } } };
   const initial = 'app://-/assets/app-initial-example.js', shared = 'app://-/assets/app-shared-example.js', page = 'app://-/assets/local-conversation-page-example.js';
   const sources = {
     [initial]: 'import{foo}from"./app-shared-example.js";import "./local-conversation-page-example.js";',
@@ -46,10 +46,11 @@ function fixture({ remote = false, broken = false, hiddenFirst = false, offline 
     visible.parentElement = area; hidden.parentElement = area;
     window.document.querySelectorAll = selector => selector.includes('sidebar-project-row') ? projectRows : [area];
   }
-  const adapter = createNativeMultiChatAdapter({ window, loadModule: async url => url === shared ? { R: () => React, D: () => ReactDOM, H: NativeUseScope } : { LocalConversationPage: Page } });
+  const adapter = createNativeMultiChatAdapter({ window, loadModule: async url => url === shared ? { R: () => React, D: () => ReactDOM, H: NativeUseScope,
+    services: { threadProjectAssignments: { setAssignment: async args => bindings.push(args) } } } : { LocalConversationPage: Page } });
   function render(index, wrongHost = false, resolved = {}) { const wrapper = rendered[index].tree.children[0];
     activeRoute = { ...wrapper.props.route, ...resolved, ...(wrongHost ? { hostId: 'wrong-host' } : {}) }; renderIndex = index; hookIndex = 0; return wrapper.children[0].type(); }
-  return { adapter, rendered, disposed, calls, provider, projects, projectRows, render,
+  return { adapter, rendered, disposed, calls, bindings, provider, projects, projectRows, render,
     composer(index, wrongHost = false, resolved = {}) { return render(index, wrongHost, resolved).props.value; } };
 }
 test('imported folder selection binds each draft project and cwd independently without an OS dialog or remount', async () => {
@@ -60,14 +61,15 @@ test('imported folder selection binds each draft project and cwd independently w
   const select = index => content(index).children[0].children[1];
   const choose = (index, id) => select(index).props.onChange({ target: { value: id } });
   choose(0, 'a'); choose(1, 'b');
-  assert.equal(content(0).children[1].props.defaultCwd, '/synthetic/project-a');
-  assert.equal(content(1).children[1].props.defaultCwd, '/synthetic/project-b');
-  assert.deepEqual(content(0).children[1].props.selectedProject, { type: 'local', projectId: 'a' });
+  assert.equal(content(0).children[2].props.defaultCwd, '/synthetic/project-a');
+  assert.deepEqual(content(0).children[2].props.surfacePlacement, { kind: 'thread' });
+  assert.equal(content(1).children[2].props.defaultCwd, '/synthetic/project-b');
+  assert.deepEqual(content(0).children[2].props.selectedProject, { type: 'local', projectId: 'a' });
   assert.deepEqual(selected, [[0, 'a'], [1, 'b']]);
-  choose(0, 'not-imported'); assert.equal(content(0).children[1].props.defaultCwd, undefined);
+  choose(0, 'not-imported'); assert.equal(content(0).children[2].props.defaultCwd, undefined);
   assert.equal(f.adapter.selectFolder, undefined);
   choose(0, 'a'); delete f.projects.a; select(0).props.onFocus();
-  assert.equal(content(0).children[1].props.submitDisabled, true);
+  assert.equal(content(0).children[2].props.submitDisabled, true);
   assert.equal(content(0).children[0].children[2].children[0], '原文件夹已移除，请重新选择。');
   assert.equal(f.rendered.length, 2);
   f.projects.windows = { name: 'Windows 示例', rootPaths: ['C:\\synthetic\\project'] }; assert.ok(f.adapter.importedFolders().some(p => p.cwd === 'C:\\synthetic\\project'));
@@ -76,7 +78,7 @@ test('imported folder selection binds each draft project and cwd independently w
   f.projectRows.push(row('new'), row('remote', 'remote'));
   select(1).props.onFocus(); assert.equal(f.adapter.importedFolders().length, 2);
   assert.ok(select(1).children.some(option => option.props?.disabled && option.props.value === 'remote'));
-  choose(1, 'new'); assert.equal(content(1).children[1].props.defaultCwd, '/synthetic/live-new');
+  choose(1, 'new'); assert.equal(content(1).children[2].props.defaultCwd, '/synthetic/live-new');
   const count = selected.length; sessions[0].dispose(); choose(0, 'new'); assert.equal(selected.length, count);
 });
 test('new panes use distinct native client drafts and adopt real identities without remounting or sending', async () => {
@@ -88,7 +90,7 @@ test('new panes use distinct native client drafts and adopt real identities with
     const route = f.rendered[i].tree.children[0].props.route, composer = f.composer(i);
     assert.equal(route.routeKind, 'client-local-thread'); assert.equal(route.conversationId, undefined);
     assert.equal(composer.kind, 'local'); assert.equal(composer.browserTabMentionConversationId, targets[i].clientThreadId);
-    assert.equal(composer.placement, 'side'); assert.equal(composer.clientThreadId, targets[i].clientThreadId);
+    assert.equal(composer.placement, 'main'); assert.equal(composer.clientThreadId, targets[i].clientThreadId);
     assert.equal(composer.conversationId, null);
     assert.equal(composer.routeConversationId, null);
   }
@@ -100,6 +102,48 @@ test('new panes use distinct native client drafts and adopt real identities with
   sessions[0].dispose(); f.composer(0, false, { conversationId: ids[1] }); assert.equal(receipts.length, 1);
   await assert.rejects(f.adapter.mount({ isConnected: true }, { hostId: 'remote', clientThreadId: targets[0].clientThreadId }));
   await assert.rejects(f.adapter.mount({ isConnected: true }, { hostId: 'local', clientThreadId: 'client-new-thread:bad' }));
+});
+test('native creation hooks bind the selected project before its first turn and retain the selected cwd through draft clearing', async () => {
+  const f = fixture(), target = f.adapter.newTarget(), receipts = [];
+  const session = await f.adapter.mount({ isConnected: true }, target, { onTarget: value => receipts.push(value) });
+  const content = () => f.render(0).children[0].children[0];
+  content().children[0].children[1].props.onChange({ target: { value: 'a' } });
+  const composer = content().children[2].props;
+  assert.deepEqual(f.bindings, []); assert.deepEqual(receipts, []);
+  composer.onLocalSubmitStart(); composer.onProjectChange(null);
+  await composer.beforeFirstTurn(ids[0]);
+  assert.deepEqual(f.bindings, [{ hostId: 'local', threadId: ids[0], assignment: { projectKind: 'local', projectId: 'a' } }]);
+  composer.onLocalConversationCreated(ids[0]);
+  assert.deepEqual(receipts, [{ hostId: 'local', threadId: ids[0], selectedCwd: '/synthetic/project-a' }]);
+  f.render(0, false, { conversationId: ids[0] }); assert.equal(receipts.length, 1);
+  session.dispose();
+  await composer.beforeFirstTurn(ids[1]);
+  assert.equal(f.bindings.length, 2);
+  assert.deepEqual(f.bindings[1], { hostId: 'local', threadId: ids[1], assignment: { projectKind: 'local', projectId: 'a' } });
+  composer.onLocalConversationCreated(ids[1]); assert.equal(receipts.length, 1);
+  delete f.projects.a;
+  await assert.rejects(composer.beforeFirstTurn(ids[1]));
+  assert.equal(f.bindings.length, 2);
+  assert.equal(f.adapter.diagnostic().kind, 'project_binding_stale_folder');
+});
+test('pending models and effort stay independent and override only their own native submission settings', async () => {
+  const f = fixture(), targets = [f.adapter.newTarget(), f.adapter.newTarget()], selections = [];
+  for (let i = 0; i < 2; i++) await f.adapter.mount({ isConnected: true }, targets[i], { onModel: value => selections.push([i, value]) });
+  const content = i => f.render(i).children[0].children[0];
+  const controls = i => content(i).children[1];
+  controls(0).children[0].children[1].props.onChange({ target: { value: 'fixture-b' } });
+  controls(0).children[1].children[1].props.onChange({ target: { value: 'high' } });
+  assert.equal(controls(1).children[0].children[1].props.value, 'fixture-a');
+  assert.equal(controls(1).children[1].children[1].props.value, 'medium');
+  const context = { collaborationMode: { mode: 'plan', settings: { model: 'global-model', reasoning_effort: 'low', developer_instructions: 'preserve-fixture' } }, prompt: 'fixture prompt' };
+  const a = await content(0).children[2].props.prepareLocalSubmit(context);
+  const b = await content(1).children[2].props.prepareLocalSubmit(context);
+  assert.deepEqual(a.collaborationMode, { mode: 'plan', settings: { model: 'fixture-b', reasoning_effort: 'high', developer_instructions: 'preserve-fixture' } });
+  assert.equal(b.collaborationMode.settings.model, 'fixture-a');
+  assert.equal(context.collaborationMode.settings.model, 'global-model');
+  assert.equal(a.prompt, context.prompt); assert.equal(selections.length, 2);
+  controls(0).children[1].children[1].props.onChange({ target: { value: 'unsupported-effort' } });
+  assert.equal(selections.length, 2);
 });
 test('native multi-chat mounts distinct task scopes over the existing app context without submitting turns', async () => {
   const f = fixture(); assert.deepEqual(f.adapter.current(), { hostId: 'local', threadId: ids[0] });

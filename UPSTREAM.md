@@ -14,6 +14,24 @@ Nuyoah-specific changes must be documented below and should prefer the
 
 ## Local changes
 
+- Independent draft models 0.27.3: model/effort choices stay per client draft;
+  native model metadata supplies the supported options and native submit
+  preparation preserves mode, permissions and other context. Account defaults
+  are not changed; existing task controls remain native.
+
+- First-turn lifecycle 0.27.2: view disposal during native creation/navigation
+  no longer cancels binding the user's submitted project to that created task.
+  Disposed UI receipts stay inert; native cancellation remains authoritative.
+
+- First-turn project binding 0.27.1: assign the selected imported local project
+  through the host's existing membership service before the user's first turn;
+  retain the submitted cwd and adopt native creation callbacks before navigation.
+
+- Native new-chat controls 0.27: use the host's main local composer for pending
+  client drafts so the native model picker and first-turn path remain available.
+  Selected local task metadata may be read back without turns to verify the
+  created conversation's cwd; mismatch and unavailable results stay visible.
+
 - Draft folders 0.26: Nuyoah's per-pane chooser reads the host's imported native
   project metadata and passes the selected project identity and cwd to its
   first-turn composer. Project metadata follows the chosen draft. No OS dialog,

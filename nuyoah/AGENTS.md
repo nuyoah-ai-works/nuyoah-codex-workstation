@@ -49,11 +49,25 @@ private paths, or perform real file deletion from this layer.
   local native client draft; only the user's native send creates the task. Adopt the
   native creation identity without remounting, and discard stale identity callbacks.
   Persist only host/thread or native client-draft identities, explicitly selected
-  imported project identities, local draft working directories and layout choices.
+  imported project identities, local draft working directories, model/effort settings and layout choices.
   Read only imported native sidebar/project metadata for this chooser; never open
   a system directory dialog or scan the disk. Stale choices must preserve the
   selected pane. No project registration, directory creation or message submission
   accompanies this choice.
+  Pending client drafts use the native main composer. Their per-draft model and
+  effort choices reuse native availability metadata and the native prepareLocalSubmit
+  context; never write account defaults or replace permission/mode settings.
+  After native creation and before the first turn, the user's selected imported
+  local project may be assigned only to that newly created task through the host's
+  threadProjectAssignments service. Revalidate the choice, preserve native errors
+  and never retry an uncertain first turn. Use the native creation callback to
+  retain the submitted directory when native draft clearing precedes navigation.
+  Native navigation may dispose that draft view before the accepted creation
+  request finishes. Do not treat view disposal as cancellation of the task-scoped
+  binding; the native coordinator owns cancellation. Keep disposed UI callbacks inert.
+  After user submission creates a local task, verify cwd with a task-scoped
+  native metadata read using includeTurns:false. Never submit a diagnostic turn,
+  read bodies or override native model/permission gates for verification.
   Remote tasks must never be resolved by local asset or session services. Never create an execution runtime, copy bodies,
   inspect credentials or persist messages. Resizing must not remount components;
   failed or stale mounts must clean up and preserve the original native page.

@@ -89,7 +89,9 @@ export function createNativeMultiChatAdapter({ window: host, loadModule } = {}) 
       }
       if (!Page) throw error();
       pageType = Page;
-      return { React, ReactDOM, Page, useScope: hooks[0] };
+      const services = Object.values(shared).filter(value => value && typeof value === 'object'
+        && typeof value.threadProjectAssignments?.setAssignment === 'function');
+      return { React, ReactDOM, Page, useScope: hooks[0], projectAssignments: services.length === 1 ? services[0].threadProjectAssignments : null };
     })().catch(() => { modules = null; throw error(); });
     return modules;
   }
@@ -172,6 +174,7 @@ export function createNativeMultiChatAdapter({ window: host, loadModule } = {}) 
     // The native timeline composer waits for an existing server task. New panes
     // use the host's first-turn composer instead, including its project picker.
     const composers = new Set(), children = discoverComposer ? [page.child] : [], visited = new Set();
+    let modelCatalog = null;
     while (children.length && visited.size < 20000) {
       const fiber = children.pop(); if (!fiber || visited.has(fiber)) continue;
       visited.add(fiber);
@@ -179,10 +182,20 @@ export function createNativeMultiChatAdapter({ window: host, loadModule } = {}) 
         const text = Function.prototype.toString.call(fiber.type);
         if (text.length < 2000 && text.includes('useAsbDirect===!0')) composers.add(fiber.type);
       }
+      const props = fiber.memoizedProps;
+      if (Array.isArray(props?.models) && Array.isArray(props?.modelOptions) && typeof props.onSelectModel === 'function') {
+        modelCatalog = { model: props.model, effort: props.reasoningEffort,
+          models: props.models.filter(m => typeof m.model === 'string' && !m.hidden).map(m => ({
+            id: m.model, name: String(m.displayName || m.model),
+            efforts: (m.supportedReasoningEfforts || []).map(e => e.reasoningEffort).filter(e => typeof e === 'string'),
+            defaultEffort: m.defaultReasoningEffort,
+            disabled: props.modelOptions.find(o => o.model?.model === m.model)?.disabledReason != null,
+          })) };
+      }
       if (fiber.child) children.push(fiber.child); if (fiber.sibling) children.push(fiber.sibling);
     }
     return { scopes, providers, wrapper, route: scopes.get('RouteScope').value,
-      NewComposer: composers.size === 1 ? [...composers][0] : null };
+      NewComposer: composers.size === 1 ? [...composers][0] : null, modelCatalog };
   }
   function current() {
     try { const { route } = capture(); return { hostId: route.hostId || 'local', ...(uuid(route.conversationId)
@@ -190,6 +203,12 @@ export function createNativeMultiChatAdapter({ window: host, loadModule } = {}) 
     catch { return null; }
   }
   function newTarget() { return { hostId: 'local', clientThreadId: 'client-new-thread:' + host.crypto.randomUUID(), title: '新会话' }; }
+  async function readTaskMetadata(target) {
+    if (target?.hostId !== 'local' || !uuid(target.threadId)) throw error();
+    const read = host.__nuyoahNativeTaskAdapter__?.readTaskMetadata;
+    if (typeof read !== 'function') throw error();
+    return read(target);
+  }
   function importedFolders() {
     const folders = new Map(), rows = Array.from(host.document.querySelectorAll?.('[data-app-action-sidebar-project-row]') || []);
     const add = (projectId, name, paths, hostId = 'local') => {
@@ -215,14 +234,14 @@ export function createNativeMultiChatAdapter({ window: host, loadModule } = {}) 
     }
     return [...folders.values()];
   }
-  async function mount(container, target, { onError = () => {}, onReady = () => {}, onTarget = () => {}, onFolder = () => {} } = {}) {
+  async function mount(container, target, { onError = () => {}, onReady = () => {}, onTarget = () => {}, onFolder = () => {}, onModel = () => {}, onSubmitting = () => {} } = {}) {
     const pending = !target?.threadId && target?.hostId === 'local' && draft(target?.clientThreadId);
     if (!target?.hostId || !(uuid(target.threadId) || pending) || !container?.isConnected) throw error();
     if (!hostInfo(target.hostId).available) throw unavailable();
-    const { React, ReactDOM, Page, useScope } = await runtime();
+    const { React, ReactDOM, Page, useScope, projectAssignments } = await runtime();
     if (!container.isConnected) throw error();
-    const { wrapper, scopes, providers, NewComposer } = capture(pending);
-    if (pending && !NewComposer) throw error();
+    const { wrapper, scopes, providers, NewComposer, modelCatalog } = capture(pending);
+    if (pending && (!NewComposer || !modelCatalog?.models?.length)) throw error();
     // Persistent workspace sessions must never override a pane's selected task.
     const route = { routeKind: pending ? 'client-local-thread' : 'local-thread', routeTemplate: '/local/:conversationId',
       ...(pending ? { clientThreadId: target.clientThreadId } : { conversationId: target.threadId }), hostId: target.hostId === 'local' ? null : target.hostId,
@@ -230,6 +249,12 @@ export function createNativeMultiChatAdapter({ window: host, loadModule } = {}) 
       search: target.hostId === 'local' ? '' : '?' + new URLSearchParams({ hostId: target.hostId }), projectContext: null };
     let disposed = false;
     let failed = false;
+    let submittedFolder = null, adoptedThread = null;
+    function adopt(threadId, hostId = 'local') {
+      if (disposed || !pending || !uuid(threadId) || adoptedThread === threadId) return;
+      adoptedThread = threadId;
+      onTarget({ hostId, threadId, ...(submittedFolder?.cwd ? { selectedCwd: submittedFolder.cwd } : {}) });
+    }
     function report(cause) {
       if (disposed || failed) return;
       failed = true;
@@ -249,6 +274,16 @@ export function createNativeMultiChatAdapter({ window: host, loadModule } = {}) 
       const thread = useScope(scopes.get('ThreadScope').scope), nativeRoute = useScope(scopes.get('RouteScope').scope), composer = scopes.get('ComposerScope');
       const [folders, setFolders] = React.useState(() => pending ? importedFolders() : []);
       const [projectId, setProjectId] = React.useState(target.projectId || '');
+      const [modelId, setModelId] = React.useState(target.model || modelCatalog?.model || '');
+      const [effort, setEffort] = React.useState(target.reasoningEffort || modelCatalog?.effort || '');
+      const model = modelCatalog?.models.find(m => m.id === modelId);
+      const selectedEffort = model?.efforts.includes(effort) ? effort : model?.defaultEffort;
+      const changeModel = (id, nextEffort) => {
+        const chosen = modelCatalog.models.find(m => m.id === id && !m.disabled);
+        if (!chosen || !chosen.efforts.includes(nextEffort)) return;
+        setModelId(id); setEffort(nextEffort); target.model = id; target.reasoningEffort = nextEffort;
+        onModel({ model: id, reasoningEffort: nextEffort });
+      };
       const folder = folders.find(folder => folder.hostId === 'local' && folder.projectId === projectId);
       const changeProject = selected => {
         const fresh = importedFolders();
@@ -263,10 +298,10 @@ export function createNativeMultiChatAdapter({ window: host, loadModule } = {}) 
         : conversationId !== target.threadId || hostId !== target.hostId || thread.value.routeConversationId !== target.threadId) {
         throw new Error('Native conversation identity mismatch');
       }
-      React.useEffect(() => { if (!disposed && pending && uuid(conversationId)) onTarget({ hostId, threadId: conversationId }); }, [conversationId, hostId]);
+      React.useEffect(() => { adopt(conversationId, hostId); }, [conversationId, hostId]);
       // Native local first-turn composers retain drafts by client identity;
       // home composers persist a shared home draft even with separate focus keys.
-      const value = pending && !conversationId ? { kind: 'local', placement: 'side', clientThreadId: target.clientThreadId,
+      const value = pending && !conversationId ? { kind: 'local', placement: 'main', clientThreadId: target.clientThreadId,
         conversationId: null, routeConversationId: null, browserTabMentionConversationId: target.clientThreadId } : { ...composer.value, clientThreadId: thread.value.clientThreadId,
         conversationId, routeConversationId: conversationId, browserTabMentionConversationId: null };
       const content = pending && !conversationId ? React.createElement('div', {
@@ -283,9 +318,50 @@ export function createNativeMultiChatAdapter({ window: host, loadModule } = {}) 
         ...folders.map(folder => React.createElement('option', { key: folder.hostId + ':' + folder.projectId, value: folder.projectId,
           disabled: folder.hostId !== 'local' }, folder.name + (folder.hostId !== 'local' ? ' · 远程（暂不支持新会话）' : '')))),
         projectId && !folder ? React.createElement('span', { role: 'status' }, '原文件夹已移除，请重新选择。') : null),
-      React.createElement(NewComposer, { surfacePlacement: { kind: 'home', isCodexHome: true }, disableAutoFocus: true,
+      React.createElement('div', { style: { display: 'flex', gap: 8, padding: '0 12px 8px', flexWrap: 'wrap' } },
+        React.createElement('label', { style: { display: 'flex', alignItems: 'center', gap: 6 } }, '模型 ', React.createElement('select', { 'aria-label': '新会话模型', value: modelId,
+          style: { width: 150, minWidth: 100, maxWidth: '100%' },
+          onChange: event => { const next = modelCatalog.models.find(m => m.id === event.target.value);
+            if (next) changeModel(next.id, next.efforts.includes(effort) ? effort : next.defaultEffort); } },
+        ...modelCatalog.models.map(m => React.createElement('option', { key: m.id, value: m.id, disabled: m.disabled }, m.name)))),
+        React.createElement('label', { style: { display: 'flex', alignItems: 'center', gap: 6 } }, '推理强度 ', React.createElement('select', { 'aria-label': '新会话推理强度', value: selectedEffort,
+          style: { width: 80, minWidth: 60 },
+          onChange: event => changeModel(modelId, event.target.value) },
+        ...(model?.efforts || []).map(e => React.createElement('option', { key: e, value: e },
+          ({ none: '无', minimal: '极低', low: '轻度', medium: '中', high: '高', xhigh: '极高', max: 'Max', ultra: 'Ultra' })[e] || e))))),
+      React.createElement(NewComposer, { surfacePlacement: { kind: 'thread' }, disableAutoFocus: true,
         defaultCwd: folder?.cwd, selectedProject: folder ? { type: 'local', projectId: folder.projectId } : null,
-        onProjectChange: changeProject, submitDisabled: !!projectId && !folder })) : React.createElement(Page);
+        onProjectChange: changeProject, submitDisabled: !!projectId && !folder || !model || model.disabled,
+        hideModeControls: true,
+        showWorkspaceDropdownInUtilityBar: false,
+        prepareLocalSubmit: async context => {
+          if (!model || model.disabled || !model.efforts.includes(selectedEffort)) throw new Error('请重新选择可用模型。');
+          submittedFolder = folder || null;
+          if (!disposed) onSubmitting(true);
+          return { ...context, collaborationMode: { ...context.collaborationMode,
+            mode: context.collaborationMode?.mode || 'default',
+            settings: { ...context.collaborationMode?.settings, model: modelId, reasoning_effort: selectedEffort } } };
+        },
+        onLocalSubmitStart: () => { submittedFolder = folder || null; if (!disposed) onSubmitting(true); },
+        onLocalSubmitError: () => { if (!disposed) onSubmitting(false); },
+        // The host's new-composer wrapper forwards the created ID as a string.
+        beforeFirstTurn: async threadId => {
+          const selected = submittedFolder || folder;
+          if (!selected) return;
+          // Native navigation can dispose the draft view while its accepted
+          // creation request still owns this task. UI disposal is not cancellation.
+          const reason = !uuid(threadId) ? 'project_binding_invalid_identity' : !projectAssignments ? 'project_binding_unavailable'
+            : !importedFolders().some(f => f.hostId === 'local' && f.projectId === selected.projectId && f.cwd === selected.cwd)
+              ? 'project_binding_stale_folder' : null;
+          if (reason) {
+            lastFailure = { kind: reason, frames: [] };
+            throw new Error('新会话的工作文件夹暂时无法绑定，请检查所选文件夹。');
+          }
+          await projectAssignments.setAssignment({ hostId: 'local', threadId,
+            assignment: { projectKind: 'local', projectId: selected.projectId } });
+        },
+        onLocalConversationCreated: threadId => adopt(threadId),
+      })) : React.createElement(Page);
       return React.createElement(composer.type, { scope: composer.scope, value },
         React.createElement(Boundary, null, content, React.createElement(Ready)));
     }
@@ -305,5 +381,5 @@ export function createNativeMultiChatAdapter({ window: host, loadModule } = {}) 
     root.render(tree);
     return { dispose() { if (!disposed) { disposed = true; root.unmount(); } }, target: { ...target } };
   }
-  return { current, mount, newTarget, importedFolders, hostInfo, prepare: runtime, diagnostic: () => lastFailure };
+  return { current, mount, newTarget, importedFolders, readTaskMetadata, hostInfo, prepare: runtime, diagnostic: () => lastFailure };
 }

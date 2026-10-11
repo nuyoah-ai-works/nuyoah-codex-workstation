@@ -68,6 +68,14 @@ test('inspect dynamically resolves a current local asset and projects a bounded 
   assert.equal(f.calls[1].args[1].limit, 1); assert.equal(f.calls[2].args[1].limit, 50);
   assert.deepEqual(f.disposed, ['readThread', 'sendRequest', 'sendRequest']);
 });
+test('working-directory verification reads only the selected task metadata without turns or execution', async () => {
+  const f = fixture();
+  assert.deepEqual(await f.adapter.readTaskMetadata(target), { hostId: 'local', threadId, cwd: '/fixture/project' });
+  assert.deepEqual(f.calls, [{ method: 'readThread', args: [threadId, { includeTurns: false }] }]);
+  assert.deepEqual(f.disposed, ['readThread']);
+  await assert.rejects(f.adapter.readTaskMetadata({ ...target, hostId: 'remote' }));
+  assert.equal(f.calls.length, 1);
+});
 
 test('catalog uses the native request table with fixed metadata-only parameters', async () => {
   const f = fixture({ methods: { sendRequest: async () => ({ data: [], nextCursor: null }) } });
@@ -97,6 +105,16 @@ test('catalog follows the explicit shared-bundle RPC accessor after the shell up
   const ambiguous = fixture({ module: { managerGetter: undefined }, source: 'import{x}from"./app-shared-one.js";import{y}from"./app-shared-two.js";' + source });
   await assert.rejects(ambiguous.adapter.listThreads('local', {}), e => e.code === 'incompatible');
   assert.equal(ambiguous.calls.length, 0);
+});
+test('metadata supports the native deferred host RPC accessor without creating a runtime', async () => {
+  const f = fixture({ module: { managerGetter: undefined }, source: 'import{x}from"./app-shared-fixture.js";' + source });
+  function deferredGetter(scope, hostId) {
+    if (!scope) throw new Error('AppServerManager RPC is unavailable for hostId:');
+    return { forHost: () => ({ readThread: async id => ({ thread: { id, cwd: '/fixture/project', status: { type: 'idle' } } }) }) }.forHost(hostId);
+  }
+  const adapter = createNativeTaskMapAdapter({ window: f.window, loadModule: async url => url.endsWith('/app-shared-fixture.js')
+    ? { module: { deferredGetter } } : f.loadModule(url) });
+  assert.equal((await adapter.readTaskMetadata(target)).cwd, '/fixture/project');
 });
 
 test('closing during native discovery or an in-flight catalog request releases it', async () => {

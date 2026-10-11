@@ -100,7 +100,9 @@ export function createNativeTaskMapAdapter({ window: hostWindow, loadModule } = 
       const imported = loadModule ? await loadModule(url) : await import(url);
       const module = imported?.module || imported;
       const source = imported?.source ?? await sourceAt(url, 18000000);
-      let getClient = onlyFunction(module, ['AppServerManager RPC is not connected', '.forHost(']);
+      const rpcGetter = candidate => onlyFunction(candidate, ['AppServerManager RPC is not connected', '.forHost('])
+        || onlyFunction(candidate, ['AppServerManager RPC is unavailable for hostId:', '.forHost(']);
+      let getClient = rpcGetter(module);
       if (!getClient) {
         // Updated shells move the registered RPC accessor into app-shared.
         // Follow only this explicit local import; never scan unrelated bundles.
@@ -108,7 +110,7 @@ export function createNativeTaskMapAdapter({ window: hostWindow, loadModule } = 
         if (sharedImports.length === 1) {
           const sharedUrl = localAsset(sharedImports[0], url);
           const shared = loadModule ? await loadModule(sharedUrl) : await import(sharedUrl);
-          getClient = onlyFunction(shared?.module || shared, ['AppServerManager RPC is not connected', '.forHost(']);
+          getClient = rpcGetter(shared?.module || shared);
         }
       }
       const createThread = onlyFunction(module, ['preparePrimaryRuntimeForFirstTurn', 'readThreadCreationInputs', '.startConversation(']);
@@ -180,6 +182,11 @@ export function createNativeTaskMapAdapter({ window: hostWindow, loadModule } = 
       return { available: false, target, running: false, canSend: false, canCreate: false,
         parent: null, resultText: null, resultTruncated: false, resultAvailable: false, error: error?.outcome ? error.message : fail('unavailable').message };
     }
+  }
+  async function readTaskMetadata(value) {
+    const target = targetOf(value), { client } = await runtime();
+    const info = await metadata(client, target);
+    return { hostId: target.hostId, threadId: target.threadId, cwd: info.cwd };
   }
   async function send(value, text) {
     const target = targetOf(value), prompt = messageOf(text);
@@ -280,5 +287,5 @@ export function createNativeTaskMapAdapter({ window: hostWindow, loadModule } = 
       .map(item => ({ id: item.id.toLowerCase(), title: clean(item.title) || '未命名聊天', status: item.status,
         updatedAt: item.updatedAt, pinned: pinned.has(item.id) }));
   }
-  return { inspect, send, create, listThreads, listChatGptThreads };
+  return { inspect, readTaskMetadata, send, create, listThreads, listChatGptThreads };
 }

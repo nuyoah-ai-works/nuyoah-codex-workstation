@@ -6,8 +6,10 @@ export function createMultiChatUI({ window: host, adapter, storage = host.localS
   const validTarget = target => validHost(target?.hostId) && (uuid(target.threadId) || draft(target));
   const directory = value => typeof value === 'string' && value.length < 4096 && !/[\0\r\n]/.test(value)
     && (value.startsWith('/') || /^[a-z]:[\\/]/i.test(value) || /^\\\\[^\\]+\\/.test(value));
+  const setting = (value, max) => typeof value === 'string' && value.length > 0 && value.length < max && !/[\0\r\n]/.test(value);
   const storedTarget = target => target ? { hostId: target.hostId, ...(draft(target)
-    ? { clientThreadId: target.clientThreadId, ...(directory(target.cwd) && typeof target.projectId === 'string' && target.projectId.length < 512
+    ? { clientThreadId: target.clientThreadId, ...(setting(target.model, 256) && setting(target.reasoningEffort, 32)
+      ? { model: target.model, reasoningEffort: target.reasoningEffort } : {}), ...(directory(target.cwd) && typeof target.projectId === 'string' && target.projectId.length < 512
       ? { cwd: target.cwd, projectId: target.projectId } : {}) } : { threadId: target.threadId }) } : null;
   const validHost = value => typeof value === 'string' && value.length > 0 && value.length < 512
     && !/[\0\r\n]/.test(value) && !value.startsWith('chatgpt') && value !== 'durable';
@@ -185,6 +187,28 @@ export function createMultiChatUI({ window: host, adapter, storage = host.localS
       slot.picker.title = slot.target ? slot.target.title + ' · ' + deviceName(slot.target) : '选择对话';
     }
   }
+  async function verifyDirectory(slot, expected, generation) {
+    const current = () => state.open && slots[slot.index] === slot && slot.generation === generation;
+    if (!current()) return;
+    slot.status.textContent = '正在核对工作目录…';
+    try {
+      const metadata = await adapter.readTaskMetadata(slot.target);
+      if (!current()) return;
+      if (metadata?.hostId !== slot.target.hostId || metadata?.threadId !== slot.target.threadId || !directory(metadata.cwd)) throw new Error('metadata_unavailable');
+      const canonical = host.electronBridge?.getInitialSidebarBootstrap?.()?.workspaceRootOptions?.canonicalPathByRoot || {};
+      const normalize = value => {
+        const path = String(canonical[value] || value || '').replace(/\\/g, '/').replace(/\/+$/, '');
+        return /^[a-z]:\//i.test(path) ? path.toLowerCase() : path;
+      };
+      const matched = metadata.hostId === slot.target.hostId && metadata.threadId === slot.target.threadId && normalize(metadata.cwd) === normalize(expected);
+      slot.el.dataset.cwdVerified = String(matched);
+      slot.status.textContent = matched ? '工作目录已核实' : '实际工作目录与所选文件夹不一致';
+    } catch {
+      if (!current()) return;
+      slot.status.textContent = '工作目录暂未核实 ';
+      slot.status.append(button('重试', () => void verifyDirectory(slot, expected, generation)));
+    }
+  }
   async function bind(index, target, { select = true, reload = false } = {}) {
     const slot = slots[index];
     if (!slot || !state.open) return;
@@ -193,8 +217,9 @@ export function createMultiChatUI({ window: host, adapter, storage = host.localS
     if (existing) { activate(existing.index); updatePickers(); return; }
     if (!reload && identity(slot.target) === identity(target)) { if (select) activate(index); return; }
     const generation = ++slot.generation;
-    slot.session?.dispose(); slot.session = null; slot.target = target; slot.body.replaceChildren();
+    slot.session?.dispose(); slot.session = null; slot.target = target; slot.submitting = false; slot.body.replaceChildren();
     delete slot.el.dataset.loaded;
+    delete slot.el.dataset.cwdVerified;
     slot.status.textContent = target ? '正在打开…' : '新建会话，或选择已有对话';
     slot.expand.disabled = !target;
     if (select) activate(index, false);
@@ -204,7 +229,7 @@ export function createMultiChatUI({ window: host, adapter, storage = host.localS
     const mountNode = node('div', 'nuyoah-chat-grid-surface'); slot.body.append(mountNode);
     try {
       const session = await adapter.mount(mountNode, target, {
-        onReady: () => { if (state.open && slots[slot.index] === slot && slot.generation === generation) { slot.status.textContent = ''; slot.el.dataset.loaded = 'true'; } },
+        onReady: () => { if (state.open && slots[slot.index] === slot && slot.generation === generation) { if (!slot.el.dataset.cwdVerified) slot.status.textContent = ''; slot.el.dataset.loaded = 'true'; } },
         onError: () => { if (state.open && slots[slot.index] === slot && slot.generation === generation) close('这个版本暂时无法显示独立对话，已恢复单聊。'); },
         onFolder: folder => {
           if (!state.open || slots[slot.index] !== slot || slot.generation !== generation || !draft(slot.target)) return;
@@ -213,11 +238,21 @@ export function createMultiChatUI({ window: host, adapter, storage = host.localS
           else { delete slot.target.cwd; delete slot.target.projectId; }
           save(); host.__codexConversationPreviewInjection__?.refresh?.();
         },
+        onModel: selection => {
+          if (!state.open || slots[slot.index] !== slot || slot.generation !== generation || !draft(slot.target)
+            || !setting(selection?.model, 256) || !setting(selection?.reasoningEffort, 32)) return;
+          slot.target.model = selection.model; slot.target.reasoningEffort = selection.reasoningEffort; save();
+        },
+        onSubmitting: value => {
+          if (state.open && slots[slot.index] === slot && slot.generation === generation) slot.submitting = value === true;
+        },
         onTarget: next => {
           if (!state.open || slots[slot.index] !== slot || slot.generation !== generation || !validTarget(next) || draft(next)) return;
-          slot.target = { ...next, title: '新会话' }; updatePickers(); save();
+          const expectedCwd = directory(next.selectedCwd) ? next.selectedCwd : slot.target?.cwd;
+          slot.submitting = false; slot.target = { ...next, title: '新会话' }; updatePickers(); save();
           if (state.active === slot.index) navigate(slot.target);
           host.__codexConversationPreviewInjection__?.refresh?.();
+          if (expectedCwd) void verifyDirectory(slot, expectedCwd, generation);
         },
       });
       if (!state.open || slots[slot.index] !== slot || slot.generation !== generation) { session.dispose(); return; }
@@ -437,9 +472,13 @@ export function createMultiChatUI({ window: host, adapter, storage = host.localS
       if (id === navigating.id || Date.now() > navigating.until) { lastNative = id; navigating = null; }
     } else if (id && id !== lastNative) {
       lastNative = id;
-      const existing = slots.find(slot => identity(slot.target) === id);
-      if (existing) activate(existing.index, false);
-      else void bind(state.active, currentTarget(), { select: false });
+      // Native creation navigates before its receipt reaches the pane. Let the
+      // pane's creation callback adopt that identity and preserve its directory.
+      if (!slots.some(slot => slot.submitting)) {
+        const existing = slots.find(slot => identity(slot.target) === id);
+        if (existing) activate(existing.index, false);
+        else void bind(state.active, currentTarget(), { select: false });
+      }
     }
     scheduleLayout();
   }
