@@ -277,10 +277,12 @@ export function createNativeTaskMapAdapter({ window: hostWindow, loadModule } = 
     if (!Array.isArray(queries)) throw fail('incompatible');
     for (const query of queries) {
       const [kind, detail] = query.queryKey || [];
-      const accountInput = kind === 'usage-settings' || kind === 'workspace-policy'
+      const accountInput = (kind === 'usage-settings' && detail === 'accounts-check') || kind === 'workspace-policy'
         || (kind === 'accounts' && ['check', 'settings'].includes(detail));
       // Inspect only active native account inputs. Historical/disabled account
       // errors must not block a different account; never refetch or clear them.
+      // usage-settings also contains billing/payment queries, which are not
+      // account eligibility and must not disable an otherwise recovered chat.
       if (!accountInput || query.isActive?.() !== true) continue;
       if (query.state?.status === 'error'
         || (query.state?.status === 'pending' && query.state?.data == null)) throw fail('settings_unavailable');

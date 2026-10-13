@@ -947,6 +947,322 @@ test("registered dispatches cannot run before dependencies finish or while write
   }
 });
 
+test("terminal dispatches resume in place as a new attempt and require fresh independent evidence", async () => {
+  const databasePath = await fixturePath();
+  const ledger = new OrchestratorLedger(databasePath, { migrate: true });
+  try {
+    const requestId = executeLedgerCommand(ledger, requestCreate("resume-evidence-request")).request.id;
+    const worker = executeLedgerCommand(ledger, {
+      command: "dispatch.register", idempotencyKey: "resume-evidence-worker", requestId,
+      dispatch: {
+        role: "worker", model: "gpt-6-sol", effort: "high",
+        threadId: "resume-evidence-worker-thread", status: "running",
+      },
+    }).dispatch;
+    const verifier = executeLedgerCommand(ledger, {
+      command: "dispatch.register", idempotencyKey: "resume-evidence-verifier", requestId,
+      dispatch: {
+        role: "verifier", model: "gpt-6-astra", effort: "high",
+        threadId: "resume-evidence-verifier-thread", status: "registered",
+      },
+    }).dispatch;
+    executeLedgerCommand(ledger, {
+      command: "dispatch.update", idempotencyKey: "resume-evidence-worker-done",
+      dispatchId: worker.id, patch: { status: "done" },
+    });
+    executeLedgerCommand(ledger, {
+      command: "dispatch.update", idempotencyKey: "resume-evidence-verifier-done",
+      dispatchId: verifier.id, patch: { status: "done" },
+    });
+    executeLedgerCommand(ledger, {
+      command: "outcome.record", idempotencyKey: "resume-evidence-outcome-1", requestId,
+      outcome: {
+        dispatchId: worker.id, attempt: 1, status: "done", verification: "UNVERIFIED",
+        summary: "First attempt completed", environmentFingerprint: "sha256:resume-evidence-env-1",
+      },
+    });
+    const oldEvidence = executeLedgerCommand(ledger, {
+      command: "evidence.record", idempotencyKey: "resume-evidence-old-pass", requestId,
+      evidenceRef: {
+        dispatchId: verifier.id, level: "test", verification: "PASS",
+        producerDispatchId: worker.id, verifierDispatchId: verifier.id,
+        reference: "test:resume-old-pass", contentHash: "sha256:resume-old-pass",
+        summary: "First attempt independently verified",
+      },
+    }).evidenceRef;
+    executeLedgerCommand(ledger, {
+      command: "request.update", idempotencyKey: "resume-evidence-request-done", requestId,
+      patch: { status: "done", verification: "PASS" },
+    });
+
+    const resumed = executeLedgerCommand(ledger, {
+      command: "dispatch.resume", idempotencyKey: "resume-evidence-worker-attempt-2",
+      requestId, dispatchId: worker.id,
+      resume: { summary: "Continue the same worker for corrections", evidence: "task:worker-follow-up" },
+    });
+    assert.equal(resumed.duplicate, false);
+    assert.equal(resumed.resumed, true);
+    assert.equal(resumed.dispatch.id, worker.id);
+    assert.equal(resumed.dispatch.threadId, worker.threadId);
+    assert.equal(resumed.dispatch.status, "running");
+    assert.equal(resumed.dispatch.attemptCount, 2);
+    assert.equal(resumed.dispatch.verification, "UNVERIFIED");
+    assert.equal(resumed.dispatch.needsAttention, false);
+    const reopened = executeLedgerCommand(ledger, { command: "request.get", requestId }).request;
+    assert.equal(reopened.status, "running");
+    assert.equal(reopened.verification, "UNVERIFIED");
+    assert.equal(reopened.outcomes.length, 1);
+    assert.equal(reopened.outcomes[0].attempt, 1);
+    assert.equal(reopened.events.some((event) => event.type === "dispatch.resumed"), true);
+    assert.throws(() => executeLedgerCommand(ledger, {
+      command: "request.update", idempotencyKey: "resume-evidence-stale-request-pass", requestId,
+      patch: { verification: "PASS" },
+    }), (error) => error.code === "INDEPENDENT_EVIDENCE_REQUIRED");
+    assert.throws(() => executeLedgerCommand(ledger, {
+      command: "outcome.record", idempotencyKey: "resume-evidence-stale-outcome-pass", requestId,
+      outcome: {
+        dispatchId: worker.id, attempt: 2, status: "done", verification: "PASS",
+        summary: "Stale evidence must not verify the resumed attempt",
+        environmentFingerprint: "sha256:resume-evidence-env-2", evidenceRefId: oldEvidence.id,
+      },
+    }), (error) => error.code === "INDEPENDENT_EVIDENCE_REQUIRED");
+
+    const freshEvidence = executeLedgerCommand(ledger, {
+      command: "evidence.record", idempotencyKey: "resume-evidence-fresh-pass", requestId,
+      evidenceRef: {
+        dispatchId: verifier.id, level: "test", verification: "PASS",
+        producerDispatchId: worker.id, verifierDispatchId: verifier.id,
+        reference: "test:resume-fresh-pass", contentHash: "sha256:resume-fresh-pass",
+        summary: "Resumed attempt independently verified",
+      },
+    }).evidenceRef;
+    executeLedgerCommand(ledger, {
+      command: "dispatch.update", idempotencyKey: "resume-evidence-worker-pass",
+      dispatchId: worker.id, patch: { status: "done", verification: "PASS" },
+    });
+    const secondOutcome = executeLedgerCommand(ledger, {
+      command: "outcome.record", idempotencyKey: "resume-evidence-outcome-2", requestId,
+      outcome: {
+        dispatchId: worker.id, attempt: 2, status: "done", verification: "PASS",
+        summary: "Second attempt independently verified",
+        environmentFingerprint: "sha256:resume-evidence-env-2", evidenceRefId: freshEvidence.id,
+      },
+    }).outcome;
+    assert.equal(secondOutcome.attempt, 2);
+    assert.equal(executeLedgerCommand(ledger, {
+      command: "request.update", idempotencyKey: "resume-evidence-request-pass-2", requestId,
+      patch: { status: "done", verification: "PASS" },
+    }).request.verification, "PASS");
+
+    const resumedVerifier = executeLedgerCommand(ledger, {
+      command: "dispatch.resume", idempotencyKey: "resume-evidence-verifier-attempt-2",
+      requestId, dispatchId: verifier.id,
+      resume: { summary: "Continue the same verifier for a new acceptance round" },
+    }).dispatch;
+    assert.equal(resumedVerifier.id, verifier.id);
+    assert.equal(resumedVerifier.role, "verifier");
+    assert.equal(resumedVerifier.status, "running");
+    assert.equal(resumedVerifier.attemptCount, 2);
+    assert.equal(executeLedgerCommand(ledger, { command: "request.get", requestId }).request.verification, "UNVERIFIED");
+    assert.equal(ledger.schemaVersion, 7);
+  } finally {
+    ledger.close();
+  }
+
+  const readOnly = new OrchestratorLedger(databasePath, { readOnly: true });
+  try {
+    const historical = executeLedgerCommand(readOnly, { command: "request.get", requestId: executeLedgerCommand(
+      readOnly, { command: "open.list" },
+    ).requests[0].id });
+    assert.equal(historical.schemaVersion, 7);
+    assert.equal(historical.readOnly, true);
+    assert.equal(historical.request.outcomes.length, 2);
+    assert.equal(historical.request.dispatches.length, 2);
+    assert.throws(() => executeLedgerCommand(readOnly, {
+      command: "dispatch.resume", idempotencyKey: "resume-read-only-rejected",
+      requestId: historical.request.id, dispatchId: historical.request.dispatches[0].id,
+      resume: { summary: "Must not write through a read-only ledger" },
+    }), (error) => error.code === "READ_ONLY");
+  } finally {
+    readOnly.close();
+  }
+});
+
+test("dispatch resume is idempotent, rejects conflicts, and cannot reopen an active or foreign task", async () => {
+  const databasePath = await fixturePath();
+  const ledger = new OrchestratorLedger(databasePath, { migrate: true });
+  try {
+    const firstRequestId = executeLedgerCommand(ledger, requestCreate("resume-idempotency-request-1")).request.id;
+    const secondRequestId = executeLedgerCommand(ledger, requestCreate("resume-idempotency-request-2")).request.id;
+    const dispatch = executeLedgerCommand(ledger, {
+      command: "dispatch.register", idempotencyKey: "resume-idempotency-dispatch", requestId: firstRequestId,
+      dispatch: {
+        role: "worker", model: "gpt-6-sol", effort: "high",
+        threadId: "resume-idempotency-thread", status: "running",
+      },
+    }).dispatch;
+    const beforeActiveRejection = ledger.count("events");
+    assert.throws(() => executeLedgerCommand(ledger, {
+      command: "dispatch.resume", idempotencyKey: "resume-active-rejected",
+      requestId: firstRequestId, dispatchId: dispatch.id, resume: { summary: "Duplicate active run" },
+    }), (error) => error.code === "DISPATCH_NOT_TERMINAL");
+    assert.equal(ledger.count("events"), beforeActiveRejection);
+    executeLedgerCommand(ledger, {
+      command: "dispatch.update", idempotencyKey: "resume-idempotency-done",
+      dispatchId: dispatch.id, patch: { status: "done", verification: "PARTIAL" },
+    });
+    const repeatedRegistration = executeLedgerCommand(ledger, {
+      command: "dispatch.register", idempotencyKey: "resume-idempotency-register-reuse",
+      requestId: firstRequestId,
+      dispatch: {
+        role: "worker", model: "gpt-6-sol", effort: "high",
+        threadId: "resume-idempotency-thread", status: "registered", retryOfDispatchId: dispatch.id,
+      },
+    });
+    assert.equal(repeatedRegistration.duplicate, true);
+    assert.equal(repeatedRegistration.reused, true);
+    assert.equal(repeatedRegistration.dispatch.id, dispatch.id);
+    assert.equal(repeatedRegistration.dispatch.status, "done");
+    assert.equal(repeatedRegistration.dispatch.attemptCount, 1);
+    const command = {
+      command: "dispatch.resume", idempotencyKey: "resume-idempotency-attempt-2",
+      requestId: firstRequestId, dispatchId: dispatch.id,
+      resume: { summary: "Continue correction in the original task", evidence: "task:follow-up-2" },
+    };
+    const first = executeLedgerCommand(ledger, command);
+    const eventCount = ledger.count("events");
+    const replay = executeLedgerCommand(ledger, command);
+    assert.equal(first.resumed, true);
+    assert.equal(replay.duplicate, true);
+    assert.equal(replay.resumed, false);
+    assert.equal(replay.dispatch.id, dispatch.id);
+    assert.equal(replay.dispatch.attemptCount, 2);
+    assert.equal(ledger.count("events"), eventCount);
+    assert.throws(() => executeLedgerCommand(ledger, {
+      ...command, resume: { summary: "Conflicting payload for the same key" },
+    }), (error) => error.code === "IDEMPOTENCY_CONFLICT");
+    assert.throws(() => executeLedgerCommand(ledger, {
+      command: "dispatch.resume", idempotencyKey: "resume-foreign-request",
+      requestId: secondRequestId, dispatchId: dispatch.id,
+      resume: { summary: "Must not attach another request to this task" },
+    }), (error) => error.code === "DISPATCH_RELATION_INVALID");
+    assert.equal(ledger.count("events"), eventCount);
+    assert.throws(() => executeLedgerCommand(ledger, {
+      command: "dispatch.resume", idempotencyKey: "resume-active-again",
+      requestId: firstRequestId, dispatchId: dispatch.id,
+      resume: { summary: "Must not create a third attempt while attempt two is active" },
+    }), (error) => error.code === "DISPATCH_NOT_TERMINAL");
+    assert.equal(ledger.getDispatch(dispatch.id).attemptCount, 2);
+  } finally {
+    ledger.close();
+  }
+});
+
+test("dispatch resume leaves no writes when dependencies or ownership block the next attempt", async () => {
+  const databasePath = await fixturePath();
+  const ledger = new OrchestratorLedger(databasePath, { migrate: true });
+  try {
+    const requestId = executeLedgerCommand(ledger, requestCreate("resume-gates-request")).request.id;
+    const dependency = executeLedgerCommand(ledger, {
+      command: "dispatch.register", idempotencyKey: "resume-gates-dependency", requestId,
+      dispatch: {
+        role: "worker", model: "gpt-6-luna", effort: "medium",
+        threadId: "resume-gates-dependency-thread", status: "registered",
+      },
+    }).dispatch;
+    const target = executeLedgerCommand(ledger, {
+      command: "dispatch.register", idempotencyKey: "resume-gates-target", requestId,
+      dispatch: {
+        role: "worker", model: "gpt-6-sol", effort: "high",
+        threadId: "resume-gates-target-thread", status: "registered", dependencies: [dependency.id],
+        ownership: [{ objectKey: "file:resume-shared", accessMode: "write", phase: "implementation" }],
+      },
+    }).dispatch;
+    executeLedgerCommand(ledger, {
+      command: "dispatch.update", idempotencyKey: "resume-gates-target-failed",
+      dispatchId: target.id, patch: { status: "failed", verification: "FAIL" },
+    });
+    const blocker = executeLedgerCommand(ledger, {
+      command: "dispatch.register", idempotencyKey: "resume-gates-blocker", requestId,
+      dispatch: {
+        role: "worker", model: "gpt-6-luna", effort: "medium",
+        threadId: "resume-gates-blocker-thread", status: "running",
+        ownership: [{ objectKey: "file:resume-shared", accessMode: "write", phase: "implementation" }],
+      },
+    }).dispatch;
+    const assertUnchanged = (eventCount, dataDigest) => {
+      const unchanged = ledger.getDispatch(target.id);
+      assert.equal(unchanged.status, "failed");
+      assert.equal(unchanged.attemptCount, 1);
+      assert.equal(unchanged.verification, "FAIL");
+      assert.equal(ledger.count("events"), eventCount);
+      assert.equal(ledger.inspect().dataDigest, dataDigest);
+    };
+    let eventCount = ledger.count("events");
+    let dataDigest = ledger.inspect().dataDigest;
+    assert.throws(() => executeLedgerCommand(ledger, {
+      command: "dispatch.resume", idempotencyKey: "resume-gates-dependency-blocked",
+      requestId, dispatchId: target.id, resume: { summary: "Dependency still open" },
+    }), (error) => error.code === "DEPENDENCY_NOT_READY");
+    assertUnchanged(eventCount, dataDigest);
+
+    executeLedgerCommand(ledger, {
+      command: "dispatch.update", idempotencyKey: "resume-gates-dependency-done",
+      dispatchId: dependency.id, patch: { status: "done" },
+    });
+    eventCount = ledger.count("events");
+    dataDigest = ledger.inspect().dataDigest;
+    assert.throws(() => executeLedgerCommand(ledger, {
+      command: "dispatch.resume", idempotencyKey: "resume-gates-ownership-blocked",
+      requestId, dispatchId: target.id, resume: { summary: "Ownership still held" },
+    }), (error) => error.code === "OWNERSHIP_CONFLICT");
+    assertUnchanged(eventCount, dataDigest);
+
+    executeLedgerCommand(ledger, {
+      command: "dispatch.update", idempotencyKey: "resume-gates-blocker-done",
+      dispatchId: blocker.id, patch: { status: "done" },
+    });
+    const resumed = executeLedgerCommand(ledger, {
+      command: "dispatch.resume", idempotencyKey: "resume-gates-ready",
+      requestId, dispatchId: target.id, resume: { summary: "All run gates are clear" },
+    }).dispatch;
+    assert.equal(resumed.status, "running");
+    assert.equal(resumed.attemptCount, 2);
+  } finally {
+    ledger.close();
+  }
+});
+
+test("dispatch resume CLI returns one machine-readable envelope", async () => {
+  const databasePath = await fixturePath();
+  assert.equal((await runCli(databasePath, { command: "migrate" })).code, 0);
+  const request = (await runCli(databasePath, requestCreate("resume-cli-request"))).body.request;
+  const dispatch = (await runCli(databasePath, {
+    command: "dispatch.register", idempotencyKey: "resume-cli-dispatch", requestId: request.id,
+    dispatch: {
+      role: "worker", model: "gpt-6-sol", effort: "high",
+      threadId: "resume-cli-thread", status: "running",
+    },
+  })).body.dispatch;
+  assert.equal((await runCli(databasePath, {
+    command: "dispatch.update", idempotencyKey: "resume-cli-done",
+    dispatchId: dispatch.id, patch: { status: "done" },
+  })).code, 0);
+  const result = await runCli(databasePath, {
+    command: "dispatch.resume", idempotencyKey: "resume-cli-attempt-2",
+    requestId: request.id, dispatchId: dispatch.id,
+    resume: { summary: "Continue the same CLI task" },
+  });
+  assert.equal(result.code, 0);
+  assert.equal(result.stderr, "");
+  assert.equal(result.body.ok, true);
+  assert.equal(result.body.duplicate, false);
+  assert.equal(result.body.resumed, true);
+  assert.equal(result.body.dispatch.id, dispatch.id);
+  assert.equal(result.body.dispatch.status, "running");
+  assert.equal(result.body.dispatch.attemptCount, 2);
+});
+
 test("ownership conflicts are global across requests and can be serialized explicitly", async () => {
   const databasePath = await fixturePath();
   const ledger = new OrchestratorLedger(databasePath, { migrate: true });

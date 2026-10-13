@@ -150,8 +150,33 @@ UPDATE 或 INSERT OR REPLACE 改写历史模型的操作均被拒绝。
 本版没有逐轮执行模型记录：同一真实任务跨模型续跑仍不能如实登记；必须先扩展该合同，
 不能以状态更新、幂等重放或续派摘要代替模型执行记录。已存在的同模型续派行为保持不变。
 
-纠正任务用新的 dispatch，并用 `retryOfDispatchId` 指向旧尝试；旧结果不会被覆盖。
-有未完成依赖或运行中所有权冲突时，dispatch 只能保持 `registered`；
+纠正任务如果创建了新的真实 Codex 任务，就用新的 dispatch，并以
+`retryOfDispatchId` 指向旧尝试；旧结果不会被覆盖。如果原 worker 或 verifier 任务仍是
+同一个真实任务，则不得再次 `dispatch.register`，而是在它已经进入 `done`、`failed` 或
+`cancelled` 后显式续派：
+
+```json
+{
+  "command": "dispatch.resume",
+  "idempotencyKey": "resume:dsp-id:attempt-2",
+  "requestId": "req_...",
+  "dispatchId": "dsp_...",
+  "resume": {
+    "summary": "继续在原任务修复验收问题",
+    "evidence": "task:follow-up-2"
+  }
+}
+```
+
+成功响应保留原 `dispatch.id`、`threadId` / `clientThreadId`、角色、关系、依赖和所有权，
+把 `status` 设为 `running`、`attemptCount` 加一，并把 dispatch 与 request 的验证状态重置为
+`UNVERIFIED`。同时写入一个不可覆盖的 `dispatch.resumed` 事件；旧 outcome 与旧事件继续
+可读。相同幂等键和相同输入只重放结果，不重复递增 attempt；换 dispatch、request 或输入
+会返回 `IDEMPOTENCY_CONFLICT`。非终态任务返回 `DISPATCH_NOT_TERMINAL`，跨 request 的
+dispatch 返回 `DISPATCH_RELATION_INVALID`。
+
+有未完成依赖或运行中所有权冲突时，`dispatch.resume` 不写入任何业务变化，并分别返回
+`DEPENDENCY_NOT_READY` 或 `OWNERSHIP_CONFLICT`。普通新 dispatch 只能保持 `registered`；
 `dispatch.register(status:"running")` 与 `dispatch.update(status:"running")` 使用同一运行门。
 依赖全部 `done` 且不存在重叠运行写者后，才允许进入 `running`。
 
@@ -195,7 +220,9 @@ UPDATE 或 INSERT OR REPLACE 改写历史模型的操作均被拒绝。
 `evidence.record` 保存证据引用而非证据正文。记录 `PASS` 时必须把证据附到真实
 `verifier` dispatch，并提供不同的 `producerDispatchId`；证据记录一经写入不可更新或
 删除。`outcome.record(PASS)` 还必须显式提供该独立证据的 `evidenceRefId`。
-`request.update(verification:"PASS")` 同样会检查账本内是否已有独立 PASS 证据。
+`request.update(verification:"PASS")` 同样会检查账本内是否已有独立 PASS 证据。任一
+dispatch 进入新一轮后，该 request 在最后一次 `dispatch.resumed` 之前产生的 PASS 证据
+只保留为历史，不得验证当前轮；新一轮必须重新登记之后产生的独立 PASS 证据。
 
 ## 候选引用与价值门
 

@@ -260,7 +260,7 @@ test('ChatGPT source reuses native recent metadata and strips snippets, bodies a
 
 test('native account failures block optional ChatGPT network reads and resume only after native recovery', async () => {
   let pins = 0, lists = 0, gate = 'error';
-  const query = { queryKey: ['usage-settings', 'fixture-account'], isActive: () => true,
+  const query = { queryKey: ['usage-settings', 'accounts-check', 'fixture-version', 'fixture-account'], isActive: () => true,
     get state() { return { status: gate, data: gate === 'success' ? {} : undefined }; } };
   async function nativeChats() {
     // Discovery anchors: Failed to list ChatGPT threads pinnedThreads scope.query.getOrFetch(pinnedNative)
@@ -274,14 +274,22 @@ test('native account failures block optional ChatGPT network reads and resume on
   for (gate of ['error', 'pending']) await assert.rejects(f.adapter.listChatGptThreads(), { code: 'settings_unavailable' });
   assert.equal(pins, 0); assert.equal(lists, 0);
   gate = 'success'; await f.adapter.listChatGptThreads(); assert.equal(pins, 1); assert.equal(lists, 1);
+  const accountKey = query.queryKey;
+  gate = 'error';
+  for (const detail of ['payment-methods', 'auto-top-up', 'auto-top-up-pricing', 'workspace-monthly-usage']) {
+    query.queryKey = ['usage-settings', detail, 'fixture-account'];
+    await f.adapter.listChatGptThreads();
+  }
+  assert.equal(lists, 5, 'billing failures are not native account checks');
+  query.queryKey = accountKey;
   gate = 'error'; query.isActive = () => false;
-  await f.adapter.listChatGptThreads(); assert.equal(lists, 2, 'inactive historical errors do not block the current account');
+  await f.adapter.listChatGptThreads(); assert.equal(lists, 6, 'inactive historical errors do not block the current account');
   query.isActive = () => true; query.queryKey = ['accounts', 'optimized', 'old-account'];
-  await f.adapter.listChatGptThreads(); assert.equal(lists, 3, 'an old optimized check is not the current workspace-policy gate');
+  await f.adapter.listChatGptThreads(); assert.equal(lists, 7, 'an old optimized check is not the current workspace-policy gate');
   query.queryKey = ['accounts', 'settings', 'fixture-account']; gate = 'success';
   f.scope.query.getOrFetch = async () => { pins++; gate = 'error'; return []; };
   await assert.rejects(f.adapter.listChatGptThreads(), { code: 'settings_unavailable' });
-  assert.equal(lists, 3, 'account failure during pin loading stops the next request');
+  assert.equal(lists, 7, 'account failure during pin loading stops the next request');
   gate = 'success'; f.scope.query.getOrFetch = async () => [];
   query.queryKey = ['workspace-policy', 'fixture-account'];
   // A failure after the helper returned an empty list must not erase old cards.

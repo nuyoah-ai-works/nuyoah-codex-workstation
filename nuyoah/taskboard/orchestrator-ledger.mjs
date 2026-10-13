@@ -632,6 +632,21 @@ export function parseDispatchPatch(value, existing) {
   return patch;
 }
 
+export function parseDispatchResume(value) {
+  assertPlainObject(value, "resume");
+  assertAllowedKeys(value, new Set(["summary", "evidence"]), "resume");
+  return {
+    summary: stringValue(value.summary ?? "Dispatch resumed", "resume.summary", {
+      maxLength: 550,
+      shortSummary: true,
+    }),
+    evidence: stringValue(value.evidence ?? "", "resume.evidence", {
+      maxLength: 900,
+      shortSummary: true,
+    }),
+  };
+}
+
 function parseIdempotencyKey(value) {
   return optionalId(value, "idempotencyKey", { required: true, maxLength: 160 });
 }
@@ -1850,11 +1865,21 @@ export class OrchestratorLedger {
       SELECT evidence.id
       FROM evidence_refs AS evidence
       JOIN dispatches AS verifier ON verifier.id = evidence.verifier_dispatch_id
+      JOIN events AS evidence_event
+        ON evidence_event.idempotency_key = evidence.idempotency_key
+       AND evidence_event.event_type = 'evidence.recorded'
       WHERE evidence.request_id = ?
         AND evidence.verification_status = 'PASS'
         AND evidence.verifier_dispatch_id IS NOT NULL
         AND evidence.verifier_dispatch_id <> evidence.producer_dispatch_id
         AND verifier.role = 'verifier'
+        AND NOT EXISTS (
+          SELECT 1
+          FROM events AS resume_event
+          WHERE resume_event.request_id = evidence.request_id
+            AND resume_event.event_type = 'dispatch.resumed'
+            AND resume_event.id > evidence_event.id
+        )
         AND (? IS NULL OR evidence.producer_dispatch_id = ?)
         AND (? IS NULL OR evidence.id = ?)
       LIMIT 1
@@ -2240,6 +2265,62 @@ export class OrchestratorLedger {
         evidence: input.evidence,
       });
       return { duplicate: false, dispatch: this.getDispatch(id) };
+    });
+  }
+
+  resumeDispatch(idempotencyKey, requestId, dispatchId, input) {
+    return this.#transaction(() => {
+      const duplicateEvent = this.#eventByKey(idempotencyKey);
+      this.#assertIdempotency(duplicateEvent, "dispatch.resumed");
+      const inputFingerprint = digestJson(input);
+      const fingerprintPrefix = `resume-input-sha256:${inputFingerprint}`;
+      if (duplicateEvent) {
+        if (duplicateEvent.request_id !== requestId || duplicateEvent.dispatch_id !== dispatchId
+          || !duplicateEvent.evidence.startsWith(fingerprintPrefix)) {
+          throw new LedgerError(
+            "IDEMPOTENCY_CONFLICT",
+            "idempotencyKey belongs to another dispatch resume operation",
+          );
+        }
+        return { duplicate: true, resumed: false, dispatch: this.getDispatch(dispatchId) };
+      }
+      const current = this.getDispatch(dispatchId);
+      if (!current) throw new LedgerError("DISPATCH_NOT_FOUND", `dispatch '${dispatchId}' does not exist`);
+      if (current.requestId !== requestId) {
+        throw new LedgerError(
+          "DISPATCH_RELATION_INVALID",
+          "dispatch.resume requires a dispatch from the specified request",
+        );
+      }
+      if (!["done", "failed", "cancelled"].includes(current.status)) {
+        throw new LedgerError(
+          "DISPATCH_NOT_TERMINAL",
+          "dispatch.resume requires a done, failed, or cancelled dispatch",
+        );
+      }
+      this.#assertDispatchCanRun(dispatchId);
+      const attemptCount = current.attemptCount + 1;
+      const timestamp = now();
+      this.database.prepare(`
+        UPDATE dispatches
+        SET status = 'running', verification_status = 'UNVERIFIED', needs_attention = 0,
+            attempt_count = ?, summary = ?, evidence = ?, updated_at = ?
+        WHERE id = ?
+      `).run(attemptCount, input.summary, input.evidence, timestamp, dispatchId);
+      this.database.prepare(`
+        UPDATE requests
+        SET status = 'running', verification_status = 'UNVERIFIED', needs_user = 0, updated_at = ?
+        WHERE id = ?
+      `).run(timestamp, requestId);
+      this.#insertEvent({
+        idempotencyKey,
+        requestId,
+        dispatchId,
+        type: "dispatch.resumed",
+        summary: `Attempt ${attemptCount} resumed: ${input.summary}`,
+        evidence: `${fingerprintPrefix}${input.evidence ? ` ${input.evidence}` : ""}`,
+      });
+      return { duplicate: false, resumed: true, dispatch: this.getDispatch(dispatchId) };
     });
   }
 
@@ -3016,6 +3097,17 @@ export function executeLedgerCommand(ledger, command) {
         parseIdempotencyKey(command.idempotencyKey),
         dispatchId,
         parseDispatchPatch(command.patch, existing),
+      );
+    }
+    case "dispatch.resume": {
+      assertAllowedKeys(command, new Set([
+        "command", "idempotencyKey", "requestId", "dispatchId", "resume",
+      ]), "command");
+      return ledger.resumeDispatch(
+        parseIdempotencyKey(command.idempotencyKey),
+        optionalId(command.requestId, "requestId", { required: true }),
+        optionalId(command.dispatchId, "dispatchId", { required: true }),
+        parseDispatchResume(command.resume),
       );
     }
     case "open.list": {
