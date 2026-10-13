@@ -391,7 +391,7 @@ export function createCapsuleSidebar({ window: host, readSnapshot, readCurrent, 
     }
   }
   function taskState(task) {
-    if (task.waitingReason) return { kind: 'waiting', label: task.waitingReason === 'approval' ? '等待授权' : '等待输入' };
+    if (task.waitingReason) return { kind: 'waiting', label: task.waitingReason === 'approval' ? '等待授权' : '等待回答' };
     if (task.runtimeStatus === 'running') return { kind: 'running', label: '运行中' };
     if (task.runtimeStatus === 'failed') return { kind: 'failed', label: '已中断' };
     if (task.statusAvailable === false || task.runtimeStatus === 'unknown') return { kind: 'unknown', label: '待同步' };

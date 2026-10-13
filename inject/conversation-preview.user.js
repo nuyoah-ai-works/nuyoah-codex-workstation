@@ -6416,7 +6416,7 @@
           projectWorkspacePath: entry.projectWorkspacePath || "",
           projectWorkspacePathStatus: entry.projectWorkspacePathStatus || "unknown",
           runtimeStatus,
-          waitingReason: nativeStatus?.waitingReason || null,
+          waitingReason: window.__nuyoahTaskAttention__?.read("local", threadId) || nativeStatus?.waitingReason || null,
           hasFinalResponse: preview?.hasFinalResponse === true,
           resultLinks: preview?.hasFinalResponse && runtimeStatus !== "running" ? preview.resultLinks || [] : [],
           progress: String(progress).replace(/\s+/g, " ").trim().slice(0, 240),
@@ -6629,6 +6629,7 @@
     window.__nuyoahSkillTimeline__?.destroy?.();
     window.__nuyoahWorkItemsUI__?.destroy?.();
     window.__nuyoahTaskMapUI__?.destroy?.();
+    window.__nuyoahTaskAttention__?.destroy?.();
     window.__nuyoahRemoteTaskCatalog__?.destroy?.();
     destroyed = true;
     document.removeEventListener("DOMContentLoaded", start);

@@ -158,6 +158,19 @@ async function attach() {
   const workstationConfig = { sidebarMode: 'capsules', workItemsCommand: [process.execPath, path.join(root, 'scripts/work-items.mjs')], skills: await readSkillConfiguration(), taskContextCommand: [process.execPath, path.join(root, 'scripts/task-context.mjs')] };
   const remoteSource = `(() => {
     window.__nuyoahRemoteTaskCatalog__?.destroy?.();
+    window.__nuyoahTaskAttention__?.destroy?.();
+    window.__nuyoahTaskAttention__ = null;
+    const attentionOwner = window.__nuyoahNativeTaskAdapter__;
+    attentionOwner.attentionSession(() => {
+      window.__codexTaskboardInjection__?.refreshContext?.();
+      window.__nuyoahCapsuleSidebar__?.sync?.();
+      window.__nuyoahTaskMapUI__?.refreshLive?.();
+    }).then(session => {
+      if (window.__nuyoahNativeTaskAdapter__ !== attentionOwner) { session.destroy(); return; }
+      window.__nuyoahTaskAttention__ = session;
+      window.__codexTaskboardInjection__?.refreshContext?.();
+      window.__nuyoahCapsuleSidebar__?.sync?.();
+    }).catch(() => {});
     const catalog = (${createRemoteTaskCatalog.toString()})({
       bridge: window.electronBridge,
       initiallyActive: false,
@@ -165,6 +178,7 @@ async function attach() {
       initialTasks: window.__NUYOAH_REMOTE_TASK_SNAPSHOT__ || [],
       initialCatalog: window.electronBridge?.getInitialSidebarBootstrap?.()?.catalogEntries || [],
       includeLocal: true,
+      readAttention: (hostId, threadId) => window.__nuyoahTaskAttention__?.read(hostId, threadId),
       onChange: change => {
         window.__codexTaskboardInjection__?.refreshContext?.();
         window.__nuyoahCapsuleSidebar__?.sync?.();

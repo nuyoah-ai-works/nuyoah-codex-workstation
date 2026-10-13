@@ -65,7 +65,7 @@ export function taskReadStatus(task, meta = {}) {
 }
 
 export function taskAttentionLabel(task, meta = {}) {
-  if (task?.waitingReason === "input") return "需要补充信息";
+  if (task?.waitingReason === "input") return "等待回答";
   if (task?.waitingReason === "approval") return "等待授权";
   if (meta.manualPending) return "已移回待处理";
   return task?.hasFinalResponse ? "等待验收" : "等待查看";
@@ -107,7 +107,8 @@ export function sortLiveTasks(tasks, metaByThread = {}) {
   return [...tasks].sort((left, right) => {
     const leftMeta = metaByThread[left.taskKey || left.threadId] || {};
     const rightMeta = metaByThread[right.taskKey || right.threadId] || {};
-    return Number(rightMeta.pinned === true) - Number(leftMeta.pinned === true)
+    return Number(Boolean(right.waitingReason)) - Number(Boolean(left.waitingReason))
+      || Number(rightMeta.pinned === true) - Number(leftMeta.pinned === true)
       || (PRIORITY_RANK[leftMeta.priority || "none"] ?? PRIORITY_RANK.none)
         - (PRIORITY_RANK[rightMeta.priority || "none"] ?? PRIORITY_RANK.none)
       || Math.max(time(right.updatedAt), time(rightMeta.statusChangedAt))

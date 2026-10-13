@@ -117,7 +117,20 @@ export function createNativeTaskMapAdapter({ window: hostWindow, loadModule } = 
       }
       const createThread = onlyFunction(module, ['preparePrimaryRuntimeForFirstTurn', 'readThreadCreationInputs', '.startConversation(']);
       const listChats = onlyFunction(module, ['Failed to list ChatGPT threads', 'pinnedThreads']);
-      return { getClient, createThread, listChats, sharedModule, sharedSource,
+      // Discover by the native async-input projection; initialized lazy functions
+      // may stringify as no-ops, so inspect the shipped source instead.
+      const attentionMatch = source.match(/([\w$]+)=[\w$]+\([\w$]+,\(\{conversationId:[\w$]+,hostId:[\w$]+\},\{get:[\w$]+\}\)=>\{[\s\S]{0,2500}?source:`userInputAsync`/);
+      let attention = exportedSelector(module, source, attentionMatch);
+      if (!attention && attentionMatch) {
+        const start = source.lastIndexOf('function ', attentionMatch.index);
+        const name = source.slice(start, attentionMatch.index).match(/^function ([\w$]+)\(\)/)?.[1];
+        const alias = name && source.slice(source.lastIndexOf('export{')).match(new RegExp('(?:\\{|,)' + name + ' as ([\\w$]+)(?:,|\\})'))?.[1];
+        if (alias && typeof module[alias] === 'function') {
+          module[alias]();
+          attention = exportedSelector(module, source, attentionMatch);
+        }
+      }
+      return { getClient, createThread, listChats, sharedModule, sharedSource, attention,
         chatPins: exportedSelector(module, source, sourceOf(listChats).match(/\.query\.getOrFetch\(([\w$]+)\)/)),
         initializeChats: chatInitializer(module, source), permissions: selectorExport(module, source, 'currentPermissions'),
         collaborationMode: selectorExport(module, source, 'latestCollaborationMode'),
@@ -455,5 +468,43 @@ export function createNativeTaskMapAdapter({ window: hostWindow, loadModule } = 
       setDescription: (id, text) => setDescription(scope, id, text),
     };
   }
-  return { inspect, readTaskMetadata, send, create, listThreads, listChatGptThreads, metadataSession };
+  async function attentionSession(onChange = () => {}) {
+    const { scope, attention } = await runtime(null);
+    if (!attention || typeof scope.watch !== 'function') throw fail('incompatible');
+    const watches = new Map();
+    let closed = false, scheduled = false;
+    const notify = () => {
+      if (scheduled || closed) return;
+      scheduled = true;
+      queueMicrotask(() => { scheduled = false; if (!closed) onChange(); });
+    };
+    return {
+      read(hostId, threadId) {
+        if (closed || !uuid(threadId) || typeof hostId !== 'string' || !hostId || hostId.length > 512) return null;
+        const key = JSON.stringify([hostId, threadId]);
+        if (!watches.has(key)) {
+          if (watches.size >= 5000) return null;
+          const state = { reason: null, dispose: null };
+          watches.set(key, state);
+          try {
+            state.dispose = scope.watch(({ get }) => {
+              // Native projection only: no thread loading, question text or answers.
+              const value = get(attention, { hostId, conversationId: threadId });
+              const reason = ['input', 'approval'].includes(value?.kind) ? value.kind : null;
+              if (state.reason !== reason) { state.reason = reason; notify(); }
+            });
+          } catch { watches.delete(key); return null; }
+        }
+        return watches.get(key)?.reason ?? null;
+      },
+      destroy() {
+        closed = true;
+        for (const state of watches.values()) {
+          if (typeof state.dispose === 'function') state.dispose(); else dispose(state.dispose);
+        }
+        watches.clear();
+      },
+    };
+  }
+  return { attentionSession, inspect, readTaskMetadata, send, create, listThreads, listChatGptThreads, metadataSession };
 }

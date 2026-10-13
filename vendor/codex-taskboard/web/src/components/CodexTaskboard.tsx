@@ -399,7 +399,7 @@ export function CodexTaskboard() {
           {task.displayStatus === "attention" && <span className="codex-live-reason">{taskAttentionLabel(task, meta[task.taskKey])}</span>}
           <span className="codex-live-time">{task.runtimeStatus === "unknown" ? "状态待同步" : task.displayStatus === "completed" ? completionKind(meta[task.taskKey], task, clock, projectAutoCompleteHours) === "history" ? "历史记录" : completionKind(meta[task.taskKey], task, clock, projectAutoCompleteHours) === "automatic" ? "已完成" : "已确认完成" : STATUS_LABELS[task.displayStatus]} · {updatedLabel(task.updatedAt)}</span>
         </span>
-        <span className="codex-live-progress">{task.progress}</span>
+        <span className="codex-live-progress">{task.waitingReason === "input" ? "有问题等你回答，点击打开对话" : task.progress}</span>
       </button>
       {(task.resultLinks?.length || 0) > 0 && <div className="codex-live-results">
         {task.resultLinks!.length === 1 ? resultButton(task, task.resultLinks![0]) : <details>

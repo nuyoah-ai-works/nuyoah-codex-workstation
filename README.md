@@ -4,7 +4,7 @@
 
 它保留中间的原生对话，把项目上下文、Taskboard、当前可调用 Skills 和本地资产统一放进右侧工作站；左侧通过顶部项目切换和双列胶囊卡片快速打开原生对话。用户只需要一个“工作站”入口，不需要在多个独立工具间来回切换。
 
-当前版本：**0.33.1**。公开源码：[nuyoah-ai-works/nuyoah-codex-workstation](https://github.com/nuyoah-ai-works/nuyoah-codex-workstation)。更新记录见 [CHANGELOG.md](./CHANGELOG.md)。
+当前版本：**0.33.3**。公开源码：[nuyoah-ai-works/nuyoah-codex-workstation](https://github.com/nuyoah-ai-works/nuyoah-codex-workstation)。更新记录见 [CHANGELOG.md](./CHANGELOG.md)。
 
 自 2026-09-02 起，本仓库是唯一现役产品线。旧 Swift Sidecar 已只读归档到
 `<archive-root>/Nuyoah Codex Workspace Swift/2026-09-02/`，不再用于开发、安装或运行。

@@ -23,7 +23,7 @@ test("native input and approval waits require attention until resolved even if p
   for (const waitingReason of ["input", "approval"]) {
     const task = { runtimeStatus: "running", waitingReason, updatedAt: meta.seenAt };
     assert.equal(liveTaskStatus(task, meta), "attention");
-    assert.equal(taskAttentionLabel(task, meta), waitingReason === "input" ? "需要补充信息" : "等待授权");
+    assert.equal(taskAttentionLabel(task, meta), waitingReason === "input" ? "等待回答" : "等待授权");
     assert.equal(liveTaskStatus({ ...task, waitingReason: null }, meta), "running");
   }
   assert.equal(taskAttentionLabel({ hasFinalResponse: true }), "等待验收");
@@ -214,4 +214,15 @@ test("read markers track clicks separately from handling and reopen on new activ
   assert.equal(taskReadStatus({ ...task, updatedAt: '2026-10-14T12:00:00Z' }, meta), 'read');
   assert.equal(taskReadStatus({ ...task, activityAt: '2026-10-13T10:01:00Z' }, meta), 'unread');
   assert.equal(taskReadStatus(task, {}), 'unread');
+});
+
+
+test('an unanswered async question survives a completed turn, acknowledgement and timeout', () => {
+  const task = { threadId: 'question', runtimeStatus: 'completed', waitingReason: 'input', hasFinalResponse: true,
+    updatedAt: '2026-01-01T00:00:00Z', activityAt: '2026-01-01T00:00:00Z' };
+  const meta = { seenAt: '2026-01-02T00:00:00Z', completedAt: '2026-01-02T00:00:00Z' };
+  assert.equal(liveTaskStatus(task, meta, Date.parse('2026-02-01T00:00:00Z')), 'attention');
+  assert.equal(taskAttentionLabel(task, meta), '等待回答');
+  assert.equal(liveTaskStatus({ ...task, waitingReason: null }, meta), 'completed');
+  assert.equal(sortLiveTasks([{ threadId: 'new', updatedAt: '2026-02-01T00:00:00Z' }, task], { new: { pinned: true } })[0], task);
 });

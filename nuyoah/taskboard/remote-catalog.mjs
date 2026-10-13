@@ -3,7 +3,7 @@
 export function createRemoteTaskCatalog({ bridge, getProjects = () => [], onChange = () => {}, now = Date.now, initialTasks = [], initialCatalog = [],
   timeoutMs = 12_000, includeLocal = false, refreshIntervalMs = 120_000, localRefreshIntervalMs = 15_000,
   localRelationRefreshIntervalMs = 15_000, retryBaseMs = 15_000, maxRetryMs = 120_000, scanTimeoutMs = 60_000,
-  setRelationTimer = setTimeout, clearRelationTimer = clearTimeout, requestPage, initiallyActive = true }) {
+  setRelationTimer = setTimeout, clearRelationTimer = clearTimeout, requestPage, readAttention = () => null, initiallyActive = true }) {
   const hosts = new Map();
   const newHost = (hostId) => ({ hostId, entries: new Map(), updates: new Map(), admitted: new Set(), available: false,
     refreshing: false, generation: 0, connectionState: "unknown", blockedByConfig: null,
@@ -480,7 +480,7 @@ export function createRemoteTaskCatalog({ bridge, getProjects = () => [], onChan
       if (project || entry.runtimeStatus === "running") host.admitted.add(entry.threadId);
       if (!host.admitted.has(entry.threadId)) return [];
       return [{ ...entry, hostName: host.displayName, runtimeStatus: status,
-        waitingReason: host.available ? entry.waitingReason : null,
+        waitingReason: host.available ? readAttention(host.hostId, entry.threadId) || entry.waitingReason : null,
         projectId: project?.id || entry.projectId || "__unassigned__",
         projectName: project?.name || "未归入项目", statusAvailable: host.available,
         progress: status === "running" ? "Codex 正在执行…" : status === "failed" ? "执行中断"

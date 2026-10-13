@@ -297,3 +297,37 @@ test('native account failures block optional ChatGPT network reads and resume on
   query.isActive = () => { if (++checks === 3) gate = 'error'; return true; };
   await assert.rejects(f.adapter.listChatGptThreads(), { code: 'settings_unavailable' });
 });
+
+
+test('native attention projects host-scoped waits and clears answered/skipped questions without RPC', async () => {
+  const selector = { resolve() {} };
+  const f = fixture({ module: { attention: selector }, source: source.replace('export{',
+    'att=sel(q,({conversationId:c,hostId:h},{get:g})=>{return {source:`userInputAsync`}});export{att as attention,') });
+  const values = new Map(), watchers = new Set();
+  f.scope.watch = callback => {
+    const run = () => callback({ get: (s, key) => { assert.equal(s, selector); return values.get(JSON.stringify(key)); } });
+    watchers.add(run); run(); return () => watchers.delete(run);
+  };
+  let changes = 0;
+  const session = await f.adapter.attentionSession(() => changes++);
+  const key = JSON.stringify({ hostId: 'local', conversationId: threadId });
+  values.set(key, { kind: 'input', blocking: false, source: 'userInputAsync' });
+  assert.equal(session.read('local', threadId), 'input');
+  assert.equal(session.read('remote-control:fixture', threadId), null);
+  await Promise.resolve(); assert.equal(changes, 1);
+  values.delete(key); for (const run of watchers) run();
+  await Promise.resolve(); assert.equal(changes, 2);
+  assert.equal(session.read('local', threadId), null);
+  values.set(key, { kind: 'approval' }); for (const run of watchers) run();
+  assert.equal(session.read('local', threadId), 'approval');
+  session.destroy(); await Promise.resolve();
+  assert.equal(changes, 2); assert.equal(watchers.size, 0);
+  assert.equal(session.read('local', threadId), null);
+  assert.deepEqual(f.calls, []);
+});
+
+test('missing native attention contract fails without loading conversation bodies', async () => {
+  const f = fixture();
+  await assert.rejects(f.adapter.attentionSession(), { code: 'incompatible' });
+  assert.deepEqual(f.calls, []);
+});

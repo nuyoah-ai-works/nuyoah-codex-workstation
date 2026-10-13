@@ -26,7 +26,7 @@ test('project and Taskboard share wait, runtime, confirmation and history semant
   }
   assert.equal(model.present(tasks).find(t => t.threadId === 'seen').displayStatus, 'history');
   assert.equal(model.present(tasks).find(t => t.threadId === 'confirmed').displayStatus, 'completed');
-  assert.equal(model.present(tasks).find(t => t.threadId === 'input').statusLabel, '需要补充信息');
+  assert.equal(model.present(tasks).find(t => t.threadId === 'input').statusLabel, '等待回答');
 });
 test('all matching project tasks are reachable and preferences remain scoped after recreation', () => {
   const { model, data } = setup();
