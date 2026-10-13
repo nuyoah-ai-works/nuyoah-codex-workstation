@@ -3,10 +3,11 @@ import assert from 'node:assert/strict';
 import { mkdtemp, mkdir, writeFile, readFile, realpath, rm, rename, symlink, stat } from 'node:fs/promises';
 import path from 'node:path';
 import os from 'node:os';
+import { promises as fs } from 'node:fs';
 import { DatabaseSync } from 'node:sqlite';
 import { AssetCatalog, listEagleFolders, scanFolder } from '../nuyoah/assets/catalog.mjs';
 import { startAssetServer } from '../nuyoah/assets/server.mjs';
-import { byteRange, MEDIA_CHUNK } from '../nuyoah/assets/previews.mjs';
+import { PreviewCache, byteRange, MEDIA_CHUNK } from '../nuyoah/assets/previews.mjs';
 import { AssetConsoleBridge } from '../lib/asset-console-bridge.mjs';
 import { createServer } from 'node:http';
 
@@ -231,6 +232,11 @@ test('service does not read legacy imports; source writes are absent, media is b
   const list=await (await call('/api/assets?sourceId='+added.source.id)).json();assert.equal(list.total,3);
   const photo=list.assets.find(a=>a.kind==='image'),movie=list.assets.find(a=>a.kind==='video');
   const thumb=await call('/media?id='+photo.id);assert.equal(thumb.status,200);assert.ok((await thumb.arrayBuffer()).byteLength<512*1024);
+  await writeFile(image,'invalid image');
+  const unavailable=await call('/media?id='+photo.id);assert.equal(unavailable.headers.get('x-preview-unavailable'),'1');
+  assert.equal(unavailable.headers.get('cache-control'),'no-store');
+  assert.doesNotMatch(unavailable.headers.get('x-preview-error')||'',/[/\\\\]/);
+  await unavailable.arrayBuffer();await writeFile(image,png);
   const media=await call('/media?id='+movie.id,{headers:{range:'bytes=0-'}});assert.equal(media.status,206);assert.equal((await media.arrayBuffer()).byteLength,MEDIA_CHUNK);
   assert.equal((await call('/media?id='+movie.id,{headers:{range:'bytes=999999999-'}})).status,416);
   for(const [method,route] of [['PUT','/api/text'],['POST','/api/assets/rename'],['DELETE','/api/assets/delete'],['POST','/api/deduplication'],['POST','/api/assets/move']]) assert.equal((await call(route,{method,body:'{}'})).status,405);
@@ -240,6 +246,19 @@ test('service does not read legacy imports; source writes are absent, media is b
   assert.equal((await call('/api/asset?id='+refs.assets[0].id+'&threadId='+id)).status,200);
   await rm(textFile);assert.equal((await call('/api/asset?id='+refs.assets[0].id+'&threadId='+id)).status,400);
   await call('/api/sources/'+added.source.id,{method:'DELETE'});assert.equal((await stat(image)).size,png.length);assert.equal((await call('/api/asset?id='+photo.id)).status,400);
+});
+
+test('image permission failures retain only a safe category and release the preview queue',async t=>{
+  const root=await realpath(await fixture(t)),file=path.join(root,'restricted.png');await writeFile(file,png);
+  const open=fs.open;
+  t.mock.method(fs,'open',async function(filePath,...args){
+    if(filePath===file)throw Object.assign(new Error(`Access denied: ${filePath}`),{code:'EPERM'});
+    return open.call(this,filePath,...args);
+  });
+  const cache=new PreviewCache(path.join(root,'previews'),{platform:'darwin'});
+  const result=await cache.image({sourcePath:file});
+  assert.equal(result.unavailable,true);assert.equal(result.reason,'source_EPERM');assert.equal(cache.running,0);
+  assert.ok(!JSON.stringify(result).includes(root));
 });
 
 test('range limits support suffix and resumed reads and reject malformed requests',()=>{

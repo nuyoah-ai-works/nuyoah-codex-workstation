@@ -3,14 +3,21 @@ import assert from 'node:assert/strict';
 import { createNativeMultiChatAdapter } from '../nuyoah/workstation/multi-chat-native.mjs';
 
 const ids = ['00000000-0000-4000-8000-000000000001', '00000000-0000-4000-8000-000000000002'];
-function fixture({ remote = false, broken = false, hiddenFirst = false, offline = false } = {}) {
+function fixture({ remote = false, broken = false, hiddenFirst = false, offline = false, activity = true } = {}) {
   const rendered = [], disposed = [], calls = [], states = [], projectRows = [], bindings = [];
   const projects = { a: { name: '文件夹甲', rootPaths: ['/synthetic/project-a'] }, b: { name: '文件夹乙', rootPaths: ['/synthetic/project-b'] } };
   let renderIndex = 0, hookIndex = 0;
-  const React = { Component: class {}, createElement: (type, props, ...children) => ({ type, props, children }), useEffect(effect) { effect(); },
+  const React = { Activity: activity ? 'fixture-activity' : undefined, Component: class {},
+    createElement: (type, props, ...children) => type === 'fixture-activity' ? children[0] : ({ type, props, children }), useEffect(effect) { effect(); },
     useState(initial) { const state = states[renderIndex] ||= [], index = hookIndex++; if (!(index in state)) state[index] = typeof initial === 'function' ? initial() : initial;
       return [state[index], value => { state[index] = value; }]; } };
-  const ReactDOM = { createRoot: (container, options) => ({ render: tree => rendered.push({ container, tree, options }), unmount: () => disposed.push(container) }) };
+  const ReactDOM = { createRoot: (container, options) => {
+    let record;
+    return { render: tree => {
+      if (!record) { record = { container, options, renders: 0 }; rendered.push(record); }
+      Object.assign(record, { tree, activityMode: tree.children[0].children[0].props.visible ? 'visible' : 'hidden' }); record.renders++;
+    }, unmount: () => disposed.push(container) };
+  } };
   function Page({ renderComposer, showComposer, onNewChat }) { return null; }
   function NewComposer(e) { return e.useAsbDirect===!0 ? null : 'native first-turn composer'; }
   function Scope() {}
@@ -49,7 +56,7 @@ function fixture({ remote = false, broken = false, hiddenFirst = false, offline 
   const adapter = createNativeMultiChatAdapter({ window, loadModule: async url => url === shared ? { R: () => React, D: () => ReactDOM, H: NativeUseScope,
     services: { threadProjectAssignments: { setAssignment: async args => bindings.push(args) } } } : { LocalConversationPage: Page } });
   function render(index, wrongHost = false, resolved = {}) { const wrapper = rendered[index].tree.children[0];
-    activeRoute = { ...wrapper.props.route, ...resolved, ...(wrongHost ? { hostId: 'wrong-host' } : {}) }; renderIndex = index; hookIndex = 0; return wrapper.children[0].type(); }
+    activeRoute = { ...wrapper.props.route, ...resolved, ...(wrongHost ? { hostId: 'wrong-host' } : {}) }; renderIndex = index; hookIndex = 0; return wrapper.children[0].type(wrapper.children[0].props); }
   return { adapter, rendered, disposed, calls, bindings, provider, projects, projectRows, render,
     composer(index, wrongHost = false, resolved = {}) { return render(index, wrongHost, resolved).props.value; } };
 }
@@ -187,4 +194,29 @@ test('incompatible native bundles fail closed and permit a later fresh discovery
 test('retained hidden editors cannot replace the identity of the visible native conversation', () => {
   const f = fixture({ hiddenFirst: true });
   assert.deepEqual(f.adapter.current(), { hostId: 'local', threadId: ids[0] });
+});
+
+test('pane visibility is idempotent, duplicate task roots are rejected and cancellation releases the root', async () => {
+  const f = fixture(), target = { hostId: 'local', threadId: ids[0] }, controller = new AbortController();
+  const container = { isConnected: true };
+  const session = await f.adapter.mount(container, target, { signal: controller.signal, getVisible: () => false });
+  assert.equal(f.rendered[0].activityMode, 'hidden');
+  session.setVisible(true); session.setVisible(true);
+  assert.equal(f.rendered[0].renders, 2);
+  await assert.rejects(f.adapter.mount({ isConnected: true }, target));
+  await assert.rejects(f.adapter.mount(container, { hostId: 'local', threadId: ids[1] }));
+  session.setVisible(false); assert.equal(f.rendered[0].activityMode, 'hidden');
+  controller.abort(); session.dispose(); session.setVisible(true);
+  assert.equal(f.disposed.length, 1); assert.equal(f.rendered[0].renders, 3);
+  const next = await f.adapter.mount({ isConnected: true }, target); next.dispose();
+  assert.equal(f.disposed.length, 2);
+});
+
+test('aborted discovery and hosts without Activity never create a pane root', async () => {
+  const f = fixture(), controller = new AbortController(), target = { hostId: 'local', threadId: ids[0] };
+  const pending = f.adapter.mount({ isConnected: true }, target, { signal: controller.signal });
+  controller.abort(); await assert.rejects(pending); assert.equal(f.rendered.length, 0);
+  const noActivity = fixture({ activity: false });
+  await assert.rejects(noActivity.adapter.mount({ isConnected: true }, target));
+  assert.equal(noActivity.rendered.length, 0);
 });

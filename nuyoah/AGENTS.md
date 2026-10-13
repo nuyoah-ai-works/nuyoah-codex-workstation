@@ -38,9 +38,24 @@ and tests are introduced. Update this file before adding it.
 Do not read Skill bodies, write Eagle data, modify Codex session files, log
 private paths, or perform real file deletion from this layer.
 
+- Automatic thread metadata is opt-in and local Codex only. Reuse the native
+  completion subscription, existing connection and title/description writers.
+  Use tool-free ephemeral gpt-6-luna turns with provider/model fallback disabled
+  and verify the selected model before inference. The native reader may project
+  at most 16 recent user/assistant texts of 2000 characters each; the latest
+  user request and final reply plus at most eight earlier user requests of 500
+  characters enter the prompt. Preserve the cumulative task mainline across status
+  checks; never treat the bounded excerpt as complete conversation history. Never call tools from the metadata prompt, scan unrelated histories,
+  read remote bodies, or persist transcript excerpts. Keep one attempt per turn,
+  compare-before-write, title locks, recoverable previous titles, and disposal.
+
 - `workstation/`: per-task summaries, separate notes and explicit source references live
   under Application Support. Use revision checks, never infer task ownership from a
   project directory, and never turn stored summaries into execution authorization.
+  The capsule sidebar reuses imported project metadata, the existing task catalog and
+  native navigation. Keep host/project/thread identities distinct, preserve native DOM
+  for fallback, and reconcile keyed cards without replacing the scrolling container.
+  Store only presentation preferences and scroll anchors, never task text or inferred status.
   The central multi-chat layout may mount at most four user-selected local or configured remote native
   conversation components using the existing AppScope and native per-thread,
   route and composer providers, keyed by host and thread identity. Only the native

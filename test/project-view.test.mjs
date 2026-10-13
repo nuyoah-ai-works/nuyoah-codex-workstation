@@ -95,3 +95,13 @@ test('new-task project view follows the selected folder, while an existing task 
  sandbox.currentCodexTaskContext=()=>({threadId:'',hostId:'local'});sandbox.activeFolderId='all';
  assert.equal(vm.runInContext('currentProjectSnapshot()',sandbox).entries.length,0);
 });
+
+test('project view respects saved expiry settings and labels automatic completion truthfully', () => {
+  const task = { threadId: 'expiry', taskKey: 'expiry', runtimeStatus: 'completed', updatedAt: new Date(Date.now() - 49 * 3600000).toISOString() };
+  const { model, data } = setup({ 'taskboard.codex-live-meta.v2': '{}' });
+  assert.equal(model.present([task])[0].statusLabel, '已完成');
+  data.set('taskboard.codex-live-position.v1', JSON.stringify({ projectAutoCompleteHours: 0 }));
+  assert.equal(model.present([task])[0].displayStatus, 'attention');
+  data.set('taskboard.codex-live-position.v1', JSON.stringify({ projectAutoCompleteHours: 72 }));
+  assert.equal(model.present([task])[0].displayStatus, 'attention');
+});

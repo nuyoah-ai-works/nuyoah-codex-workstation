@@ -14,6 +14,16 @@ Nuyoah-specific changes must be documented below and should prefer the
 
 ## Local changes
 
+- Thread metadata 0.31.0: opt-in local title/description upkeep uses native
+  completion events and the existing app-server connection, fixed lightweight
+  ephemeral generation with no model fallback, bounded text and native writes.
+  No desktop bundle, global Hook config or conversation file is modified.
+
+- Taskboard 0.29.0: source sections prioritize project tasks above chats, with
+  vertical status groups and horizontal card rows. Shared Nuyoah presentation
+  logic adds configurable idle completion and independent per-task read markers;
+  upstream task storage and native conversations stay unchanged.
+
 - Independent draft models 0.27.3: model/effort choices stay per client draft;
   native model metadata supplies the supported options and native submit
   preparation preserves mode, permissions and other context. Account defaults

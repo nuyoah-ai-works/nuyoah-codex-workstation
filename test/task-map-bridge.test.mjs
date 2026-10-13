@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import vm from 'node:vm';
 import { readFile } from 'node:fs/promises';
 import { createInjectorScheduler } from '../lib/injector-scheduler.mjs';
+import { createCapsuleSidebar } from '../nuyoah/workstation/sidebar-capsules.mjs';
 
 const source = await readFile(new URL('../scripts/injector.mjs', import.meta.url), 'utf8');
 const bridge = source.slice(source.indexOf('async function processTaskMapRequest('), source.indexOf('async function currentArchivedThreadIds()'));
@@ -37,9 +38,11 @@ test('map read errors return a scoped safe failure instead of dropping the injec
 test('production injection retains task action memory before the outer UI teardown', () => {
   const from = source.indexOf('const rendererSource = '), to = source.indexOf(';\n', from) + 1;
   const generated = vm.runInNewContext(`${source.slice(from, to)}\nrendererSource;`, {
-    workstationConfig: {}, projectSource: '', taskContextSource: '', workCanvasSource: '', workItemsSource: '', taskActionTransportSource: '', remoteSource: '', multiChatSource: '',
+    workstationConfig: {}, projectSource: '', taskContextSource: '', workCanvasSource: '', workItemsSource: '', taskActionTransportSource: '', remoteSource: '', multiChatSource: '', autoMetadataSource: '',
     userSource: 'window.__codexConversationPreviewInjection__.destroy();', taskMapSource: '',
     createNativeTaskMapAdapter: function () { return {}; }, createSkillTimeline: function () { return {}; },
+    createSkillClassification: function () { return { labels: [], categoryFor: () => '未分类' }; },
+    createCapsuleSidebar,
   });
   let retained = false, destroyed = false;
   const window = { __nuyoahTaskMapUI__: { retainActions() { retained = true; } },

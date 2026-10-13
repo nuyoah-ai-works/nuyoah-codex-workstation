@@ -8,6 +8,8 @@ export function createNativeMultiChatAdapter({ window: host, loadModule } = {}) 
   let modules;
   let pageType;
   let lastFailure = null;
+  const sessions = new Map();
+  const containers = new WeakSet();
   function hostInfo(hostId) {
     if (hostId === 'local') return { known: true, available: true, name: '本机' };
     if (typeof hostId !== 'string' || !hostId || hostId.length >= 512 || /[\0\r\n]/.test(hostId)) return { known: false, available: false };
@@ -72,7 +74,7 @@ export function createNativeMultiChatAdapter({ window: host, loadModule } = {}) 
       const shared = loadModule ? await loadModule(sharedUrl) : await import(sharedUrl);
       const React = shared[libraryAlias(sharedText, '.createElement=function')]?.();
       const ReactDOM = shared[libraryAlias(sharedText, '.createRoot=function')]?.();
-      if (!React?.createElement || !ReactDOM?.createRoot) throw error();
+      if (!React?.createElement || !React.Activity || !ReactDOM?.createRoot) throw error();
       const hooks = Object.values(shared).filter(value => {
         let text; try { text = typeof value === 'function' ? Function.prototype.toString.call(value) : ''; } catch { return false; }
         return text.includes('getOwnValue') && text.includes('Missing query client') && text.includes('useRef');
@@ -234,12 +236,14 @@ export function createNativeMultiChatAdapter({ window: host, loadModule } = {}) 
     }
     return [...folders.values()];
   }
-  async function mount(container, target, { onError = () => {}, onReady = () => {}, onTarget = () => {}, onFolder = () => {}, onModel = () => {}, onSubmitting = () => {} } = {}) {
+  async function mount(container, target, { onError = () => {}, onReady = () => {}, onTarget = () => {}, onFolder = () => {}, onModel = () => {}, onSubmitting = () => {}, signal, getVisible = () => true } = {}) {
     const pending = !target?.threadId && target?.hostId === 'local' && draft(target?.clientThreadId);
-    if (!target?.hostId || !(uuid(target.threadId) || pending) || !container?.isConnected) throw error();
+    if (!target?.hostId || !(uuid(target.threadId) || pending) || !container?.isConnected || signal?.aborted) throw error();
     if (!hostInfo(target.hostId).available) throw unavailable();
     const { React, ReactDOM, Page, useScope, projectAssignments } = await runtime();
-    if (!container.isConnected) throw error();
+    if (!container.isConnected || signal?.aborted) throw error();
+    const sessionKey = JSON.stringify([target.hostId, target.threadId || target.clientThreadId]);
+    if (sessions.has(sessionKey) || containers.has(container)) throw error();
     const { wrapper, scopes, providers, NewComposer, modelCatalog } = capture(pending);
     if (pending && (!NewComposer || !modelCatalog?.models?.length)) throw error();
     // Persistent workspace sessions must never override a pane's selected task.
@@ -249,6 +253,7 @@ export function createNativeMultiChatAdapter({ window: host, loadModule } = {}) 
       search: target.hostId === 'local' ? '' : '?' + new URLSearchParams({ hostId: target.hostId }), projectContext: null };
     let disposed = false;
     let failed = false;
+    let ready = false, reportTimer = null;
     let submittedFolder = null, adoptedThread = null;
     function adopt(threadId, hostId = 'local') {
       if (disposed || !pending || !uuid(threadId) || adoptedThread === threadId) return;
@@ -261,7 +266,7 @@ export function createNativeMultiChatAdapter({ window: host, loadModule } = {}) 
       const message = String(cause?.message || '');
       lastFailure = { kind: /^(Missing scope instance|Missing parent scope|Missing query client|Native conversation identity mismatch)$/.test(message) ? message : 'native_component_error',
         frames: String(cause?.stack || '').match(/app:\/\/-\/assets\/[\w.-]+\.js:\d+:\d+/g)?.slice(0, 6) || [] };
-      host.setTimeout(() => { if (!disposed) onError(error()); }, 0);
+      reportTimer = host.setTimeout(() => { reportTimer = null; if (!disposed) onError(error()); }, 0);
     }
     class Boundary extends React.Component {
       constructor(props) { super(props); this.state = { failed: false }; }
@@ -269,8 +274,8 @@ export function createNativeMultiChatAdapter({ window: host, loadModule } = {}) 
       componentDidCatch(cause) { report(cause); }
       render() { return this.state.failed ? null : this.props.children; }
     }
-    function Ready() { React.useEffect(() => { if (!disposed) onReady(); }, []); return null; }
-    function ScopedChat() {
+    function Ready() { React.useEffect(() => { if (!disposed && !ready) { ready = true; onReady(); } }, []); return null; }
+    function ScopedChat({ visible }) {
       const thread = useScope(scopes.get('ThreadScope').scope), nativeRoute = useScope(scopes.get('RouteScope').scope), composer = scopes.get('ComposerScope');
       const [folders, setFolders] = React.useState(() => pending ? importedFolders() : []);
       const [projectId, setProjectId] = React.useState(target.projectId || '');
@@ -363,23 +368,59 @@ export function createNativeMultiChatAdapter({ window: host, loadModule } = {}) 
         onLocalConversationCreated: threadId => adopt(threadId),
       })) : React.createElement(Page);
       return React.createElement(composer.type, { scope: composer.scope, value },
-        React.createElement(Boundary, null, content, React.createElement(Ready)));
+        React.createElement(React.Activity, { mode: visible ? 'visible' : 'hidden' },
+          React.createElement(Boundary, null, content, React.createElement(Ready))));
     }
     // The host resolves a separate client-new-thread identity for each stored
     // conversation. Reuse its wrapper rather than treating server IDs as client IDs.
-    let tree = React.createElement(wrapper, { route, archivedConversationPreview: false },
-      React.createElement(ScopedChat));
-    for (const provider of providers) {
-      let value = provider.value;
-      if (provider.type.displayName === 'Location' && value?.location) value = { ...value,
-        location: { ...value.location, pathname: route.pathname, search: route.search, state: null } };
-      tree = React.createElement(provider.type, { value }, tree);
+    function tree(visible) {
+      let result = React.createElement(wrapper, { route, archivedConversationPreview: false },
+        React.createElement(ScopedChat, { visible }));
+      for (const provider of providers) {
+        let value = provider.value;
+        if (provider.type.displayName === 'Location' && value?.location) value = { ...value,
+          location: { ...value.location, pathname: route.pathname, search: route.search, state: null } };
+        result = React.createElement(provider.type, { value }, result);
+      }
+      return result;
     }
     const prefix = Array.from(target.hostId, char => /^[a-z\d-]$/i.test(char) ? char : '_' + char.codePointAt(0).toString(16) + '_').join('');
+    let visible = Boolean(getVisible());
     const root = ReactDOM.createRoot(container, { identifierPrefix: 'nuyoah-' + prefix + '-' + (target.threadId || target.clientThreadId.slice(18)) + '-',
       onUncaughtError: report, onCaughtError: report });
-    root.render(tree);
-    return { dispose() { if (!disposed) { disposed = true; root.unmount(); } }, target: { ...target } };
+    // Scope providers own retained stores and must outlive a temporary hide.
+    // Only the pane content's effects/subscriptions enter the Activity boundary.
+    const render = () => root.render(tree(visible));
+    let cleanupFailure = null;
+    const abort = () => { try { session.dispose(); } catch {} };
+    const session = {
+      setVisible(value) {
+        if (disposed || visible === Boolean(value)) return;
+        visible = Boolean(value); render();
+      },
+      dispose() {
+        if (cleanupFailure) throw cleanupFailure;
+        if (disposed) return;
+        disposed = true;
+        signal?.removeEventListener('abort', abort);
+        if (reportTimer != null) host.clearTimeout(reportTimer);
+        try { root.unmount(); } catch (cause) {
+          cleanupFailure = cause;
+          lastFailure = { kind: 'native_cleanup_error', frames: [] };
+          throw cause;
+        }
+        sessions.delete(sessionKey); containers.delete(container);
+      },
+      target: { ...target },
+    };
+    sessions.set(sessionKey, session);
+    containers.add(container);
+    signal?.addEventListener('abort', abort, { once: true });
+    try {
+      if (signal?.aborted) { session.dispose(); throw error(); }
+      render();
+      return session;
+    } catch (cause) { try { session.dispose(); } catch {} throw cause; }
   }
   return { current, mount, newTarget, importedFolders, readTaskMetadata, hostInfo, prepare: runtime, diagnostic: () => lastFailure };
 }

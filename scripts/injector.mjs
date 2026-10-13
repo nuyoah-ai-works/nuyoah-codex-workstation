@@ -23,6 +23,7 @@ import { readArchivedThreadIds } from "../lib/thread-archive-state.mjs";
 import { readUnarchivedCodexThreads } from "../lib/codex-thread-catalog.mjs";
 import { createChatGptCatalog } from "../nuyoah/taskboard/chatgpt-catalog.mjs";
 import { createRemoteTaskCatalog } from "../nuyoah/taskboard/remote-catalog.mjs";
+import { createCapsuleSidebar } from "../nuyoah/workstation/sidebar-capsules.mjs";
 
 import { TaskContextStore, handleTaskContextRequest } from '../nuyoah/workstation/task-context-store.mjs';
 import { createSkillTimeline } from '../nuyoah/workstation/skill-timeline-ui.mjs';
@@ -30,6 +31,7 @@ import { WorkItemsStore, handleWorkItemsRequest } from '../nuyoah/workstation/wo
 import { createProjectView } from '../nuyoah/workstation/project-view.mjs';
 import { liveStateRuntimeSource } from '../nuyoah/taskboard/live-state.mjs';
 import { ColdHistoryService } from '../nuyoah/workstation/cold-history.mjs';
+import { createSkillClassification } from '../nuyoah/skills/classification.mjs';
 import { readSkillConfiguration } from '../nuyoah/skills/configuration.mjs';
 const taskContextStore = new TaskContextStore();
 const workItemsStore = new WorkItemsStore();
@@ -37,6 +39,7 @@ import { TaskRelationsService } from '../nuyoah/workstation/task-relations.mjs';
 import { TaskActionStore } from '../nuyoah/workstation/task-action-store.mjs';
 import { TaskActionService, rendererTaskAdapter } from '../nuyoah/workstation/task-action-service.mjs';
 import { createNativeTaskMapAdapter } from '../nuyoah/workstation/task-map-native.mjs';
+import { createAutoThreadMetadata } from '../nuyoah/workstation/auto-thread-metadata.mjs';
 import { createNativeMultiChatAdapter } from '../nuyoah/workstation/multi-chat-native.mjs';
 import { createMultiChatUI } from '../nuyoah/workstation/multi-chat-ui.mjs';
 const taskActionStore = new TaskActionStore();
@@ -108,6 +111,7 @@ async function closeClient() {
   rendererRevision++;
   const closingClient = client;
   if (assetConsoleBridge.client === closingClient) await assetConsoleBridge.dispose();
+  try { await closingClient?.evaluate(`window.__nuyoahAutoThreadMetadata__?.destroy?.()`); } catch {}
   closingClient?.close();
   if (client === closingClient) client = null;
 }
@@ -151,7 +155,7 @@ async function attach() {
   const workCanvasSource = await readFile(path.join(root, 'nuyoah/workstation/work-canvas.js'), 'utf8');
   const taskMapSource = await readFile(path.join(root, 'nuyoah/workstation/task-map-ui.js'), 'utf8');
   const taskActionTransportSource = await readFile(path.join(root, 'nuyoah/workstation/task-action-transport.js'), 'utf8');
-  const workstationConfig = { workItemsCommand: [process.execPath, path.join(root, 'scripts/work-items.mjs')], skills: await readSkillConfiguration(), taskContextCommand: [process.execPath, path.join(root, 'scripts/task-context.mjs')] };
+  const workstationConfig = { sidebarMode: 'capsules', workItemsCommand: [process.execPath, path.join(root, 'scripts/work-items.mjs')], skills: await readSkillConfiguration(), taskContextCommand: [process.execPath, path.join(root, 'scripts/task-context.mjs')] };
   const remoteSource = `(() => {
     window.__nuyoahRemoteTaskCatalog__?.destroy?.();
     const catalog = (${createRemoteTaskCatalog.toString()})({
@@ -163,6 +167,7 @@ async function attach() {
       includeLocal: true,
       onChange: change => {
         window.__codexTaskboardInjection__?.refreshContext?.();
+        window.__nuyoahCapsuleSidebar__?.sync?.();
         window.__nuyoahTaskMapUI__?.refreshLive?.();
         if (change?.relationsChanged) window.__nuyoahTaskMapUI__?.invalidateRelations?.();
       },
@@ -200,9 +205,11 @@ async function attach() {
     window.addEventListener('message', receive);
     const syncActivity = () => {
       chats.setActive(document.visibilityState !== 'hidden'
+        && Boolean(document.querySelector('#codex-taskboard-page:not([hidden])'))
         && window.__codexConversationPreviewInjection__?.isWorkstationVisible?.() === true);
       catalog.setActive(document.visibilityState !== 'hidden'
-        && window.__codexConversationPreviewInjection__?.isWorkstationVisible?.() === true);
+        && (window.__codexConversationPreviewInjection__?.isWorkstationVisible?.() === true
+          || window.__nuyoahCapsuleSidebar__?.visible?.() === true));
     };
     // Opening or closing a panel changes activity immediately. An in-flight scan
     // stops on close, so pagination and relation timers cannot keep going.
@@ -225,7 +232,10 @@ async function attach() {
   })();`;
   const projectSource = `window.__nuyoahProjectView__ = (${createProjectView.toString()})({storage: window.localStorage, states: ${liveStateRuntimeSource()}});`;
   const multiChatSource = `window.__nuyoahMultiChat__?.destroy?.(); window.__nuyoahMultiChatNative__ = (${createNativeMultiChatAdapter.toString()})({ window }); window.__nuyoahMultiChat__ = (${createMultiChatUI.toString()})({ window, adapter: window.__nuyoahMultiChatNative__ });`;
-  const rendererSource = `if (window.top === window) { window.__NUYOAH_WORKSTATION_CONFIG__ = ${JSON.stringify(workstationConfig)}; ${projectSource}\n${taskContextSource}\nwindow.__nuyoahTaskMapUI__?.retainActions?.();\n${userSource}\n${workCanvasSource}\nwindow.__nuyoahNativeTaskAdapter__ = (${createNativeTaskMapAdapter.toString()})({ window });\n${taskActionTransportSource}\n${taskMapSource}\n${workItemsSource}\nwindow.__nuyoahSkillTimeline__?.destroy?.(); window.__nuyoahSkillTimeline__ = (${createSkillTimeline.toString()})({ window, document });\n${remoteSource}\n${multiChatSource}\n}`;
+  const autoMetadataSource = `window.__nuyoahAutoThreadMetadata__?.destroy?.();
+    window.__nuyoahAutoThreadMetadata__ = (${createAutoThreadMetadata.toString()})({ window, adapter: window.__nuyoahNativeTaskAdapter__ });
+    void window.__nuyoahAutoThreadMetadata__.start();`;
+  const rendererSource = `if (window.top === window) { window.__NUYOAH_WORKSTATION_CONFIG__ = ${JSON.stringify(workstationConfig)}; window.__nuyoahCreateCapsuleSidebar__ = ${createCapsuleSidebar.toString()}; window.__nuyoahSkillClassification__ = (${createSkillClassification.toString()})(); ${projectSource}\n${taskContextSource}\nwindow.__nuyoahTaskMapUI__?.retainActions?.();\n${userSource}\n${workCanvasSource}\nwindow.__nuyoahNativeTaskAdapter__ = (${createNativeTaskMapAdapter.toString()})({ window });\n${taskActionTransportSource}\n${taskMapSource}\n${workItemsSource}\nwindow.__nuyoahSkillTimeline__?.destroy?.(); window.__nuyoahSkillTimeline__ = (${createSkillTimeline.toString()})({ window, document });\n${remoteSource}\n${multiChatSource}\n${autoMetadataSource}\n}`;
   const registered = await client.send("Page.addScriptToEvaluateOnNewDocument", { source: rendererSource });
   registeredScriptIdentifier = registered.identifier;
   await client.evaluate(rendererSource);
@@ -345,10 +355,15 @@ async function refreshSkillCatalog(owner = client, revision = rendererRevision) 
 async function pushPreviews(owner = client, revision = rendererRevision) {
   if (!isCurrentRenderer(owner, revision)) return;
   if (!await owner.evaluate(`window.__codexConversationPreviewInjection__?.sidebarMode === 'enhanced'
+    || window.__nuyoahCapsuleSidebar__?.visible?.() === true
     || (document.visibilityState !== 'hidden'
       && window.__codexConversationPreviewInjection__?.isWorkstationVisible?.() === true)`)) return;
-  const [requests, rawRecentCatalog, pinnedThreadIds, nativeUnarchivedThreads, archivedIds] = await Promise.all([
+  const [requestPacket, rawRecentCatalog, pinnedThreadIds, nativeUnarchivedThreads, archivedIds] = await Promise.all([
     owner.evaluate(`(() => {
+      if (window.__nuyoahCapsuleSidebar__) return {
+        items: window.__nuyoahCapsuleSidebar__.previewRequests(),
+        visibleOnly: window.__codexConversationPreviewInjection__?.isWorkstationVisible?.() !== true,
+      };
       const seen = new Set();
       const allPanel = document.getElementById('codex-sidebar-all-projects');
       const rows = allPanel
@@ -356,20 +371,21 @@ async function pushPreviews(owner = client, revision = rendererRevision) {
         : Array.from(document.querySelectorAll('[data-app-action-sidebar-thread-row]:not([data-codex-sidebar-all-project-row])'));
       const pending = rows.filter((row) => row.getAttribute('data-codex-conversation-preview-loaded') !== 'true');
       const loaded = rows.filter((row) => row.getAttribute('data-codex-conversation-preview-loaded') === 'true');
-      return [...pending, ...loaded].flatMap((row) => {
+      return { items: [...pending, ...loaded].flatMap((row) => {
         const id = row.getAttribute('data-app-action-sidebar-thread-id') || '';
         const title = row.getAttribute('data-app-action-sidebar-thread-title') || '';
         const key = id + '\\n' + title;
         if (seen.has(key)) return [];
         seen.add(key);
         return [{ key, id, title }];
-      });
+      }) };
     })()`),
     repository.readRecentCatalog(),
     repository.readPinnedThreadIds(),
     currentUnarchivedThreads(),
     currentArchivedThreadIds(),
   ]);
+  const requests = Array.isArray(requestPacket?.items) ? requestPacket.items : [];
   const recentCatalog = orderCatalogByArchive(rawRecentCatalog, archivedIds);
   historyCatalog = recentCatalog;
   const taskCatalog = nativeUnarchivedThreads.length
@@ -397,7 +413,7 @@ async function pushPreviews(owner = client, revision = rendererRevision) {
     title: entry.title,
   }));
   const previewRequests = Array.from(new Map(
-    [...taskRequests, ...recentRequests, ...interruptedRequests, ...(Array.isArray(requests) ? requests : [])]
+    [...requests, ...(requestPacket?.visibleOnly ? [] : [...taskRequests, ...recentRequests, ...interruptedRequests])]
       .map((request) => [request.key, request]),
   ).values());
   const searchCatalog = recentCatalog.filter((entry) => entry.projectId && entry.projectName);
@@ -426,7 +442,7 @@ async function pumpRequests() {
     const request = ready.map ? window.__nuyoahTaskMapUI__?.takeRequest?.() : null;
     const tasks = request ? api?.getTaskboardSnapshot?.({ includeProjectHistory: true })?.tasks || [] : [];
     return {
-      active: document.visibilityState !== 'hidden' && (api?.sidebarMode === 'enhanced' || api?.isWorkstationVisible?.() === true),
+      active: document.visibilityState !== 'hidden' && (api?.sidebarMode === 'enhanced' || window.__nuyoahCapsuleSidebar__?.visible?.() === true || api?.isWorkstationVisible?.() === true),
       skills: ready.skills ? api?.takeSkillLabelRequest?.() : null,
       context: ready.context ? window.__nuyoahSkillTimeline__?.takeRequest?.() || window.__nuyoahTaskContextUI__?.takeRequest?.() : null,
       work: ready.work ? window.__nuyoahWorkItemsUI__?.takeRequest?.() : null,

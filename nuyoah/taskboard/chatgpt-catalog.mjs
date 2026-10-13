@@ -4,15 +4,42 @@ export function createChatGptCatalog({ read, onChange = () => {}, now = Date.now
   setTimer = setTimeout, clearTimer = clearTimeout } = {}) {
   let active = false, disposed = false, epoch = 0, work = null, timer = null;
   let tasks = [], failed = false, hasSnapshot = false, signature = '';
+  let failures = 0, nextReadAt = 0;
   const uuid = value => typeof value === 'string' && /^[a-f\d]{8}(?:-[a-f\d]{4}){3}-[a-f\d]{12}$/i.test(value);
   function cancelTimer() { clearTimer(timer); timer = null; }
+  function schedule() {
+    cancelTimer();
+    if (active && !disposed && !work) timer = setTimer(() => { timer = null; void refresh(); },
+      Math.min(2147483647, Math.max(failed ? 0 : 2000, nextReadAt - now())));
+  }
+  function recordFailure(error) {
+    const protectedFailure = [401, 403, 429].includes(error?.status)
+      || error?.errorCode === 'cloudflare_challenge';
+    const delay = protectedFailure ? 300000 : error?.code === 'settings_unavailable' ? 60000
+      : Math.min(300000, 15000 * 2 ** Math.min(failures, 5));
+    failures++;
+    nextReadAt = Math.max(now() + delay, Number.isFinite(error?.retryAtMs) ? error.retryAtMs : 0);
+    const changed = !failed;
+    failed = true;
+    tasks = tasks.map(task => ({ ...task, runtimeStatus: 'unknown', progress: '状态待同步' }));
+    signature = '';
+    if (changed) onChange();
+  }
   function refresh() {
     if (!active || disposed || work) return work;
+    if (now() < nextReadAt) { schedule(); return null; }
+    cancelTimer();
     const revision = epoch;
-    let deadline;
-    const timeout = new Promise((_, reject) => { deadline = setTimer(() => reject(new Error('unavailable')), 12000); });
-    work = Promise.race([Promise.resolve().then(read), timeout]).then(rows => {
+    let timedOut = false;
+    const deadline = setTimer(() => {
       if (!active || disposed || revision !== epoch) return;
+      timedOut = true;
+      recordFailure(new Error('unavailable'));
+    }, 12000);
+    // A display deadline cannot cancel the host query. Keep the single-flight
+    // lock until that query settles, even across panel close/reopen.
+    work = Promise.resolve().then(read).then(rows => {
+      if (timedOut || !active || disposed || revision !== epoch) return;
       if (!Array.isArray(rows)) throw new Error('unavailable');
       const previous = new Map(tasks.map(task => [task.threadId, task]));
       const next = new Map();
@@ -31,17 +58,15 @@ export function createChatGptCatalog({ read, onChange = () => {}, now = Date.now
           progress: runtimeStatus === 'running' ? '正在生成回复…' : runtimeStatus === 'failed' ? '生成遇到问题，打开聊天查看' : runtimeStatus === 'unknown' ? '状态待同步' : '打开聊天查看结果',
         });
       }
-      tasks = [...next.values()]; failed = false; hasSnapshot = true;
+      tasks = [...next.values()]; failed = false; hasSnapshot = true; failures = 0; nextReadAt = 0;
       const key = JSON.stringify(tasks);
       if (key !== signature) { signature = key; onChange(); }
-    }).catch(() => {
+    }).catch(error => {
       if (!active || disposed || revision !== epoch) return;
-      failed = true;
-      tasks = tasks.map(task => ({ ...task, runtimeStatus: 'unknown', progress: '状态待同步' }));
-      signature = ''; onChange();
+      recordFailure(error);
     }).finally(() => {
       clearTimer(deadline); work = null;
-      if (active && !disposed) { cancelTimer(); timer = setTimer(() => { timer = null; void refresh(); }, failed ? 15000 : 2000); }
+      schedule();
     });
     return work;
   }

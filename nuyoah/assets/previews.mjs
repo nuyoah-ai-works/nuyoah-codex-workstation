@@ -36,27 +36,38 @@ export class PreviewCache {
   release() { const next = this.waiters.shift(); if (next) { next.signal?.removeEventListener('abort', next.abort); next.resolve(); } else this.running--; }
   async image(asset, { detail = false, signal } = {}) {
     await this.slot(signal);
+    let stage = 'source';
     try {
       const source = !detail && asset.thumbnail ? asset.thumbnail : asset.sourcePath;
       const info = await regularFile(source);
       if (this.platform !== 'darwin' || info.size > 128 * 1024 * 1024 || /\.svg$/i.test(source)) return { body: placeholder, type: 'image/svg+xml', unavailable: true };
-      const dimensions = await readImageDimensions(source).catch(() => null);
+      const dimensions = await readImageDimensions(source);
       if (dimensions && dimensions.width * dimensions.height > 60_000_000) return { body: placeholder, type: 'image/svg+xml', unavailable: true };
       const key = createHash('sha256').update(`${source}:${info.size}:${info.mtimeMs}:${detail}`).digest('hex');
+      stage = 'cache';
       await mkdir(this.root, { recursive: true });
       const target = path.join(this.root, `${key}.jpg`);
       if (!await stat(target).catch(() => null)) {
         const temp = `${target}.${process.pid}.${Math.random().toString(16).slice(2)}.tmp`;
         try {
+          stage = 'conversion';
           await new Promise((resolve, reject) => {
-            const child = spawn('/usr/bin/sips', ['-s', 'format', 'jpeg', '-s', 'formatOptions', '65', '-Z', detail ? '1600' : '480', source, '--out', temp], { stdio: 'ignore' });
+            const child = spawn('/usr/bin/sips', ['-s', 'format', 'jpeg', '-s', 'formatOptions', '65', '-Z', detail ? '1600' : '480', source, '--out', temp], { stdio: ['ignore', 'ignore', 'pipe'] });
+            let diagnostic = '';
+            child.stderr.on('data', chunk => { diagnostic += chunk.toString().slice(0, Math.max(0, 2048 - diagnostic.length)); });
             const timer = setTimeout(() => { child.kill('SIGKILL'); reject(new Error('预览超时')); }, 8000);
             const abort = () => { child.kill('SIGKILL'); reject(new Error('cancelled')); };
             signal?.addEventListener('abort', abort, { once: true });
             child.once('error', reject);
-            child.once('close', code => { clearTimeout(timer); signal?.removeEventListener('abort', abort); code === 0 ? resolve() : reject(new Error('此格式暂时无法预览')); });
+            child.once('close', (code, killedBy) => {
+              clearTimeout(timer); signal?.removeEventListener('abort', abort);
+              const reason = /permission|not permitted|denied/i.test(diagnostic) ? 'PERMISSION'
+                : /temp|directory/i.test(diagnostic) ? 'TEMP_DIRECTORY' : `EXIT_${code ?? killedBy ?? 'UNKNOWN'}`;
+              code === 0 ? resolve() : reject(Object.assign(new Error('此格式暂时无法预览'), { code: reason }));
+            });
           });
           if ((await stat(temp)).size > (detail ? 2 : 0.5) * 1024 * 1024) throw new Error('预览超过大小限制');
+          stage = 'cache';
           await rename(temp, target);
         } finally { await rm(temp, { force: true }); }
       }
@@ -64,7 +75,8 @@ export class PreviewCache {
       return { body, type: 'image/jpeg' };
     } catch (error) {
       if (signal?.aborted) throw error;
-      return { body: placeholder, type: 'image/svg+xml', unavailable: true };
+      return { body: placeholder, type: 'image/svg+xml', unavailable: true,
+        reason: `${stage}_${/^[A-Z_0-9]+$/.test(error.code || '') ? error.code : 'failed'}` };
     } finally { this.release(); }
   }
   async prune() {

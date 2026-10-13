@@ -22,8 +22,10 @@ export function createProjectView({ storage, states }) {
     } catch {}
   }
   function present(tasks) {
-    let meta = {}, hasStore = false, cutoff;
+    let meta = {}, hasStore = false, cutoff, hours = 48;
     try {
+      const preference = JSON.parse(storage.getItem('taskboard.codex-live-position.v1') || '{}').projectAutoCompleteHours;
+      if ([0, 24, 48, 72, 168].includes(preference)) hours = preference;
       const raw = storage.getItem('taskboard.codex-live-meta.v2'); hasStore = raw !== null;
       const value = JSON.parse(raw || '{}');
       if (value && typeof value === 'object' && !Array.isArray(value)) meta = value;
@@ -34,12 +36,14 @@ export function createProjectView({ storage, states }) {
     meta = states.bootstrapRemoteHistory(tasks, meta, cutoff);
     return tasks.map(task => {
       const saved = meta[task.taskKey || task.threadId] || {};
-      let status = states.liveTaskStatus(task, saved);
-      if (status === 'completed' && states.completionKind(saved) === 'history') status = 'history';
+      const now = Date.now();
+      const kind = states.completionKind(saved, task, now, hours);
+      let status = states.liveTaskStatus(task, saved, now, hours);
+      if (status === 'completed' && kind === 'history') status = 'history';
       if (task.catalogHistory && !task.waitingReason && task.runtimeStatus !== 'running') status = 'history';
       return { ...task, identity: identity(task), displayStatus: status,
         statusLabel: task.catalogHistory && status === 'history' ? task.archived ? '已归档' : '历史记录'
-          : status === 'attention' ? states.taskAttentionLabel(task, saved) : labels[status] };
+          : status === 'attention' ? states.taskAttentionLabel(task, saved) : status === 'completed' && kind === 'automatic' ? '已完成' : labels[status] };
     }).sort((a, b) => Number(a.catalogHistory === true) - Number(b.catalogHistory === true)
       || (Date.parse(b.updatedAt) || 0) - (Date.parse(a.updatedAt) || 0));
   }

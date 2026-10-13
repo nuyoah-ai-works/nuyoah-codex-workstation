@@ -18,15 +18,24 @@ function composer(ids, { width = 700, height = 120, display = 'flex', visibility
     // Native metadata markers can be hidden even when their owning composer is visible.
     querySelectorAll: () => ids.map(id => ({ ...element({ 'data-above-composer-conversation-id': id }), hidden: true })) };
 }
-function context({ active = null, roots = [], rows = [], local = [], recent = [], current = [], remote = [], hasLocalThread = () => false, grid = null, folders = [] } = {}) {
+function context({ active = null, roots = [], rows = [], local = [], recent = [], current = [], remote = [], hasLocalThread = () => false, grid = null, folders = [], nativeTarget = null } = {}) {
   const read = vm.runInNewContext(`(${code})`, {
     document: { querySelector: () => active, querySelectorAll: selector => selector.startsWith('[data-codex-composer-root]') ? roots.filter(root => root.placement === 'thread') : rows },
     getComputedStyle: node => node.style, normalizedThreadId: value => String(value || '').trim().replace(/^(?:local|cloud):/i, '').toLowerCase(),
     searchCatalogByThread: new Map(local.map(entry => [entry.threadId, entry])), recentCatalogByThread: new Map(recent.map(entry => [entry.threadId, entry])), taskCatalog: current,
-    window: { __nuyoahRemoteTaskCatalog__: { snapshot: () => remote, hasLocalThread }, __nuyoahMultiChat__: grid, __nuyoahMultiChatNative__: { importedFolders: () => folders } },
+    window: { __nuyoahRemoteTaskCatalog__: { snapshot: () => remote, hasLocalThread }, __nuyoahMultiChat__: grid, __nuyoahMultiChatNative__: { importedFolders: () => folders, current: () => nativeTarget } },
   });
   return JSON.parse(JSON.stringify(read()));
 }
+
+test('visible native route outranks stale or client-draft sidebar markers with explicit device identity', () => {
+  const stale = row('client-new-thread:' + a, 'local', 'Old draft');
+  const local = [{ threadId: b, projectId: 'local-p', title: 'Local task' }];
+  const remote = [{ threadId: b, hostId: 'remote:fixture', projectId: 'remote-p', title: 'Remote task' }];
+  assert.equal(context({ active: stale, nativeTarget: { hostId: 'local', threadId: b }, local, remote }).projectId, 'local-p');
+  assert.equal(context({ active: row(a, 'local'), nativeTarget: { hostId: 'remote:fixture', threadId: b }, local, remote }).projectId, 'remote-p');
+  assert.deepEqual(context({ active: row(a, 'local'), nativeTarget: { hostId: 'local', clientThreadId: 'client-new-thread:' + b }, local }), empty);
+});
 
 test('the selected grid pane owns workstation context while native navigation catches up', () => {
   const grid = { isOpen: () => true, currentTarget: () => ({ hostId: 'local', threadId: b, title: 'Selected pane' }) };

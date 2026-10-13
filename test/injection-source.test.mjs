@@ -24,7 +24,7 @@ test("workspace menu pages stay in a shared side panel and accept conversation c
   assert.doesNotMatch(source, /const hasAction = Boolean\(slash\)/);
   assert.match(source, /routeWorkspaceCommand/);
   assert.match(source, /openWorkstationPanel\(command\.panel, \{ query: command\.query \}\)/);
-  assert.match(source, /skillOrganizerQuery = typeof options\?\.query === "string" \? options\.query\.trim\(\) : "";/);
+  assert.match(source, /if \(typeof options\?\.query === "string"\) \{\s*skillOrganizerQuery = options\.query\.trim\(\);\s*skillOrganizerFilter = "全部";/);
   assert.match(source, /setSkillCatalog/);
   assert.match(source, /takeSkillLabelRequest/);
   assert.match(source, /requestSkillCatalogRefresh/);
@@ -48,7 +48,8 @@ test("workspace menu pages stay in a shared side panel and accept conversation c
   assert.match(source, /skillMatchesCategory[\s\S]{0,180}entry\.sourceDescription/);
   assert.match(source, /data-nuyoah-workstation-frame="true"\]:has\(\.codex-skill-label-notice:not\(\[hidden\]\)\)[\s\S]{0,160}grid-template-rows: 50px auto auto auto auto auto auto minmax/);
   assert.match(source, /codex-skill-callable/);
-  assert.match(source, /SKILL_FILTERS = \["当前任务"/);
+  assert.match(source, /DEFAULT_SKILL_FILTERS = \["全部", "当前任务", "常用"\]/);
+  assert.match(source, /skillPrimaryCategory\(entry\) === category/);
   assert.match(source, /skillMatchesCurrentTask/);
   assert.match(source, /插入到任务/);
   assert.match(source, /projectId: typeof entry\?\.projectId/);

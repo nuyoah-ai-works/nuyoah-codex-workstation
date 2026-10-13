@@ -46,6 +46,21 @@ export function createMultiChatUI({ window: host, adapter, storage = host.localS
   function node(tag, className, text) { const el = doc.createElement(tag); if (className) el.className = className; if (text) el.textContent = text; return el; }
   function button(label, action) { const el = node('button', '', label); el.type = 'button'; el.onclick = action; return el; }
   function identity(target) { return target && target.hostId + ':' + (target.threadId || target.clientThreadId); }
+  function slotVisible(slot) {
+    return state.open && !state.suspended && doc.visibilityState !== 'hidden';
+  }
+  function syncSessions() {
+    try { for (const slot of slots) slot.session?.setVisible?.(slotVisible(slot)); return true; }
+    catch { close('四宫格暂时无法恢复，已返回单聊。'); return false; }
+  }
+  function releaseSlot(slot) {
+    slot.generation++;
+    const session = slot.session; slot.session = null;
+    let released = true;
+    try { slot.mountAbort?.abort(); } catch { released = false; } slot.mountAbort = null;
+    try { session?.dispose(); } catch { released = false; }
+    return released;
+  }
   function pickerValue(target) { return target?.hostId === 'local' ? target.threadId || target.clientThreadId : JSON.stringify([target.hostId, target.threadId]); }
   function deviceName(target) { return target.hostId === 'local' ? '本机' : target.hostName || adapter.hostInfo?.(target.hostId)?.name || '远程设备'; }
   function catalog() {
@@ -105,6 +120,7 @@ export function createMultiChatUI({ window: host, adapter, storage = host.localS
   }
   function layout() {
     if (!view || !state.open || painting) return;
+    if (!syncSessions()) return;
     let source = sourceArea?.isConnected && !sourceArea.closest('[hidden]') ? sourceArea : null;
     let rect = source?.getBoundingClientRect();
     if (!rect || rect.width <= 100 || rect.height <= 100) { source = nativeArea(); rect = source?.getBoundingClientRect(); }
@@ -149,6 +165,7 @@ export function createMultiChatUI({ window: host, adapter, storage = host.localS
   function suspend() {
     if (!state.open || state.suspended) return;
     state.suspended = true; cancelFocusRequest(); cancelSwap(); endDrag();
+    if (!syncSessions()) return;
     view.hidden = true; restoreSource(); resizeObserver?.disconnect();
     entry?.setAttribute('aria-expanded', 'false');
     host.__codexConversationPreviewInjection__?.refresh?.();
@@ -216,8 +233,9 @@ export function createMultiChatUI({ window: host, adapter, storage = host.localS
     const existing = target && slots.find(other => other !== slot && identity(other.target) === identity(target));
     if (existing) { activate(existing.index); updatePickers(); return; }
     if (!reload && identity(slot.target) === identity(target)) { if (select) activate(index); return; }
-    const generation = ++slot.generation;
-    slot.session?.dispose(); slot.session = null; slot.target = target; slot.submitting = false; slot.body.replaceChildren();
+    if (!releaseSlot(slot)) { close('部分分屏清理失败，已返回单聊。'); return; }
+    const generation = slot.generation;
+    slot.target = target; slot.submitting = false; slot.body.replaceChildren();
     delete slot.el.dataset.loaded;
     delete slot.el.dataset.cwdVerified;
     slot.status.textContent = target ? '正在打开…' : '新建会话，或选择已有对话';
@@ -227,8 +245,11 @@ export function createMultiChatUI({ window: host, adapter, storage = host.localS
     save();
     if (!target) return;
     const mountNode = node('div', 'nuyoah-chat-grid-surface'); slot.body.append(mountNode);
+    const mountAbort = new host.AbortController(); slot.mountAbort = mountAbort;
     try {
       const session = await adapter.mount(mountNode, target, {
+        signal: mountAbort.signal,
+        getVisible: () => slotVisible(slot) && slots[slot.index] === slot && slot.generation === generation,
         onReady: () => { if (state.open && slots[slot.index] === slot && slot.generation === generation) { if (!slot.el.dataset.cwdVerified) slot.status.textContent = ''; slot.el.dataset.loaded = 'true'; } },
         onError: () => { if (state.open && slots[slot.index] === slot && slot.generation === generation) close('这个版本暂时无法显示独立对话，已恢复单聊。'); },
         onFolder: folder => {
@@ -257,6 +278,7 @@ export function createMultiChatUI({ window: host, adapter, storage = host.localS
       });
       if (!state.open || slots[slot.index] !== slot || slot.generation !== generation) { session.dispose(); return; }
       slot.session = session;
+      session.setVisible?.(slotVisible(slot));
       if (select) navigate(target);
     } catch (cause) {
       if (!state.open || slot.generation !== generation) return;
@@ -440,18 +462,21 @@ export function createMultiChatUI({ window: host, adapter, storage = host.localS
     if (layoutFrame != null) host.cancelAnimationFrame(layoutFrame); layoutFrame = null;
     cancelSwap(); restoreOpen = false;
     state.generation++; state.open = false; state.suspended = false; dragging = null; save();
-    for (const slot of slots) { slot.generation++; slot.session?.dispose(); }
+    let released = true;
+    for (const slot of slots) if (!releaseSlot(slot)) released = false;
     slots = []; resizeObserver?.disconnect(); resizeObserver = null;
     view?.remove(); view = null; area = null; restoreSource(); entry?.setAttribute('aria-expanded', 'false');
     if (!destroyed && !message && activeTarget) {
       if (!draft(activeTarget)) navigate(activeTarget);
     }
     if (!destroyed) host.__codexConversationPreviewInjection__?.refresh?.();
+    if (!released) message = '部分分屏清理失败，已返回单聊。';
     if (message) feedback(message);
     if (!destroyed) entry?.focus();
   }
   function sync() {
     if (destroyed) return;
+    if (doc.visibilityState === 'hidden') { suspend(); return; }
     const nativeEntry = doc.getElementById('nuyoah-workstation-entry');
     if (!nativeEntry?.parentElement) { if (entry?.isConnected) entry.remove(); suspend(); return; }
     if (!entry) { entry = button('四宫格', () => state.open ? close() : void open()); entry.id = 'nuyoah-chat-layout-entry'; entry.setAttribute('aria-expanded', 'false'); }
@@ -459,15 +484,16 @@ export function createMultiChatUI({ window: host, adapter, storage = host.localS
     if (resizeTimer != null && state.open && !state.suspended) { scheduleLayout(); return; }
     if (!state.open) { if (restoreOpen && adapter.current() && nativeArea()) void open(); return; }
     const current = adapter.current(), id = identity(current);
-    updatePickers();
     if (!id) { suspend(); return; }
     if (state.suspended) {
       const source = nativeArea(), rect = source?.getBoundingClientRect();
       if (!rect || rect.width < 540 || rect.height < 440) return;
+      updatePickers();
       state.suspended = false; view.hidden = false; lastNative = id; navigating = null;
       resizeObserver?.observe(source); entry.setAttribute('aria-expanded', 'true');
       layout(); host.__codexConversationPreviewInjection__?.refresh?.(); return;
     }
+    updatePickers();
     if (navigating) {
       if (id === navigating.id || Date.now() > navigating.until) { lastNative = id; navigating = null; }
     } else if (id && id !== lastNative) {
@@ -522,13 +548,14 @@ export function createMultiChatUI({ window: host, adapter, storage = host.localS
   host.addEventListener('resize', resize); doc.addEventListener('keydown', keydown, true);
   doc.addEventListener('pointerdown', cancelFocusRequest, true);
   const interval = host.setInterval(sync, 800);
+  doc.addEventListener('visibilitychange', sync);
   return { open, close, bind, activate, swap, sync, newChat, selectTask, isOpen: () => state.open && !state.suspended, currentTarget: () => state.open && !state.suspended ? slots[state.active]?.target || null : null,
     composer: () => state.open && !state.suspended ? slots[state.active]?.body.querySelector('[contenteditable="true"]') || null : null,
     snapshot: () => ({ open: state.open && !state.suspended, suspended: state.suspended, active: state.active, x: state.x, y: state.y,
     slots: slots.map(slot => ({ target: slot.target, loaded: slot.el.dataset.loaded === 'true' })) }),
     destroy() { if (destroyed) return; const resume = state.open || restoreOpen; destroyed = true; close();
       try { storage.setItem(key, JSON.stringify({ ...JSON.parse(storage.getItem(key)), open: resume })); } catch {}
-      observer.disconnect(); host.clearTimeout(timer); host.clearInterval(interval);
+      observer.disconnect(); host.clearTimeout(timer); host.clearInterval(interval); doc.removeEventListener('visibilitychange', sync);
       host.clearTimeout(resizeTimer); host.removeEventListener('resize', resize); doc.removeEventListener('keydown', keydown, true); doc.removeEventListener('pointerdown', cancelFocusRequest, true); entry?.remove(); notice?.remove(); style.remove(); },
   };
 }

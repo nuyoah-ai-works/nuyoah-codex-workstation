@@ -280,3 +280,32 @@ test('cloud navigation, reopening and reload retain positions; pointer and keybo
     assert.deepEqual(await page.evaluate(() => sent), []);
   } finally { await browser?.close(); await new Promise(resolve => server.close(resolve)); }
 });
+
+test('cleanup failure in one pane does not prevent the other roots or native surface from being released', { skip: !process.env.NUYOAH_PLAYWRIGHT_MODULE, timeout: 60000 }, async () => {
+  const { chromium } = await import(process.env.NUYOAH_PLAYWRIGHT_MODULE);
+  const server = createServer((request, response) => { response.setHeader('content-type', 'text/html'); response.end(html()); }); let browser;
+  try {
+    await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+    browser = await chromium.launch({ executablePath: process.env.NUYOAH_TEST_BROWSER, headless: true });
+    const page = await browser.newPage({ viewport: { width: 1400, height: 1000 } });
+    await page.goto('http://127.0.0.1:' + server.address().port);
+    await page.evaluate(() => {
+      const mount = adapter.mount;
+      adapter.mount = async (...args) => {
+        const session = await mount(...args);
+        return { ...session, dispose() { session.dispose(); if (args[1].threadId === tasks[0].threadId) throw Error('Synthetic cleanup failure'); } };
+      };
+      return ui.open();
+    });
+    await page.waitForFunction(() => ui.snapshot().slots[0]?.loaded);
+    for (let i = 1; i < 4; i++) await page.evaluate(i => ui.bind(i, tasks[i], { select: false }), i);
+    await page.waitForFunction(() => ui.snapshot().slots.every(s => s.loaded));
+    await page.evaluate(() => ui.close());
+    assert.equal(await page.evaluate(() => disposals.length), 4);
+    assert.equal(await page.locator('#nuyoah-chat-grid').count(), 0);
+    assert.equal(await page.locator('#original').evaluate(e => e.inert), false);
+    assert.match(await page.locator('.nuyoah-chat-grid-notice').innerText(), /清理失败/);
+    await page.evaluate(() => ui.destroy());
+    assert.equal(await page.locator('#nuyoah-chat-layout-entry').count(), 0);
+  } finally { await browser?.close(); await new Promise(resolve => server.close(resolve)); }
+});

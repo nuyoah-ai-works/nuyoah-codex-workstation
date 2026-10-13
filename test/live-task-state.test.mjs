@@ -9,11 +9,14 @@ import {
   readLiveView,
   saveLiveView,
   LIVE_VIEW_KEY,
-  liveTaskStatus,
+  liveTaskStatus as statusWithExpiry,
   liveStateRuntimeSource,
   sortLiveTasks,
   visibleLiveTasks,
 } from "../nuyoah/taskboard/live-state.mjs";
+
+// Existing status cases exercise manual handling with expiry disabled.
+const liveTaskStatus = (task, meta, now = Date.now(), hours = 0) => statusWithExpiry(task, meta, now, hours);
 
 test("native input and approval waits require attention until resolved even if previously confirmed", () => {
   const meta = { seenAt: "2026-09-11T01:00:00Z", completedAt: "2026-09-11T02:00:00Z" };
@@ -43,10 +46,10 @@ test("saved filters, history expansion, counts and scroll survive reload while c
   assert.notEqual(LIVE_VIEW_KEY, "taskboard.codex-live-view.v1", "must not overwrite the orchestrator/all view selection");
   let raw = "";
   const storage = { getItem: () => raw, setItem: (_, value) => { raw = value; } };
-  const state = { query: "design", projectId: "remote-project", historyOpen: true, visibleCounts: { history: 25, attention: 15 }, scrollTop: 722.5 };
+  const state = { projectAutoCompleteHours: 48, query: "design", projectId: "remote-project", historyOpen: true, visibleCounts: { history: 25, attention: 15 }, scrollTop: 722.5 };
   saveLiveView(storage, state);
   assert.deepEqual(readLiveView(storage), { ...state, historyOpenBySource: { project: true, chatgpt: true } });
-  const separated = { ...state, historyOpenBySource: { project: true, chatgpt: false }, visibleCounts: { "project:attention": 15, "chatgpt:attention": 5, "chatgpt:history": 25 } };
+  const separated = { ...state, historyOpenBySource: { project: true, chatgpt: false }, visibleCounts: { "project:attention": 15, "project:attention:local": 5, "project:attention:remote-fixture": 15, "chatgpt:attention": 5, "chatgpt:history": 25 } };
   saveLiveView(storage, separated);
   assert.deepEqual(readLiveView(storage), separated);
   raw = "broken";
@@ -145,14 +148,14 @@ test("only idle ChatGPT attention expires after 72 hours without altering acknow
   const now = Date.parse("2026-09-30T04:00:00Z");
   const threshold = now - 72 * 60 * 60 * 1000;
   const task = { source: "chatgpt", runtimeStatus: "completed", updatedAt: new Date(threshold).toISOString() };
-  for (const state of [ { liveTaskStatus, completionKind, bootstrapRemoteHistory }, (0, eval)(liveStateRuntimeSource()) ]) {
+  for (const state of [ { liveTaskStatus: statusWithExpiry, completionKind, bootstrapRemoteHistory }, (0, eval)(liveStateRuntimeSource()) ]) {
     const meta = { manualPending: true, pinned: true };
     assert.equal(state.liveTaskStatus(task, meta, now), "completed");
     assert.equal(state.completionKind(meta, task, now), "automatic");
     assert.deepEqual(meta, { manualPending: true, pinned: true });
     assert.equal(state.liveTaskStatus({ ...task, updatedAt: new Date(threshold + 1).toISOString() }, {}, now), "attention");
     assert.equal(state.liveTaskStatus({ ...task, updatedAt: new Date(threshold - 1).toISOString() }, {}, now), "completed");
-    assert.equal(state.liveTaskStatus({ ...task, source: undefined }, {}, now), "attention");
+    assert.equal(state.liveTaskStatus({ ...task, source: undefined }, {}, now, 0), "attention");
     assert.equal(state.liveTaskStatus({ ...task, runtimeStatus: "running" }, meta, now), "running");
     assert.equal(state.liveTaskStatus({ ...task, runtimeStatus: "failed" }, {}, now), "failed");
     assert.equal(state.liveTaskStatus({ ...task, updatedAt: "" }, {}, now), "attention");
@@ -168,4 +171,47 @@ test("only idle ChatGPT attention expires after 72 hours without altering acknow
     assert.equal(state.liveTaskStatus({ ...task, updatedAt: new Date(now - 48 * 3600000).toISOString() }, imported, now), "attention");
     assert.equal(state.bootstrapRemoteHistory([{ ...task, hostId: "chatgpt", taskKey: "chatgpt:fixture" }], meta, now), meta);
   }
+});
+
+
+test("project expiry is reversible, uses actual activity and respects runtime and manual resets", () => {
+  const now = Date.parse("2026-10-13T10:00:00Z");
+  const old = new Date(now - 48 * 3600000).toISOString();
+  const task = { runtimeStatus: "completed", activityAt: old, updatedAt: new Date(now).toISOString() };
+  for (const states of [{ liveTaskStatus: statusWithExpiry, completionKind }, (0, eval)(liveStateRuntimeSource())]) {
+    assert.equal(states.liveTaskStatus(task, {}, now), "completed");
+    assert.equal(states.completionKind({}, task, now), "automatic");
+    assert.equal(states.liveTaskStatus(task, {}, now - 1), "attention");
+    assert.equal(states.liveTaskStatus(task, {}, now, 0), "attention");
+    assert.equal(states.liveTaskStatus(task, {}, now, 72), "attention");
+    for (const runtimeStatus of ["running", "failed", "unknown"]) {
+      assert.equal(states.liveTaskStatus({ ...task, runtimeStatus }, {}, now), runtimeStatus === "unknown" ? "attention" : runtimeStatus);
+    }
+    for (const waitingReason of ["input", "approval"]) assert.equal(states.liveTaskStatus({ ...task, waitingReason }, {}, now), "attention");
+    for (const activityAt of [null, "invalid", new Date(now).toISOString()]) assert.equal(states.liveTaskStatus({ ...task, activityAt }, {}, now), "attention");
+    const manual = { manualPending: true, statusChangedAt: new Date(now).toISOString() };
+    assert.equal(states.liveTaskStatus(task, manual, now), "attention");
+    assert.equal(states.liveTaskStatus(task, manual, now + 48 * 3600000), "completed");
+    assert.equal(states.completionKind({ seenAt: old, initialHistory: true }, task, now), "history");
+    assert.equal(states.completionKind({ seenAt: old, completedAt: old }, task, now), "confirmed");
+    assert.equal(states.completionKind({ seenAt: new Date(now - 72 * 3600000).toISOString(), initialHistory: true }, task, now), "automatic");
+  }
+  let raw;
+  const storage = { getItem: () => raw, setItem: (_, value) => { raw = value; } };
+  for (const hours of [0, 24, 48, 72, 168]) {
+    saveLiveView(storage, { projectAutoCompleteHours: hours });
+    assert.equal(readLiveView(storage).projectAutoCompleteHours, hours);
+  }
+});
+
+test("read markers track clicks separately from handling and reopen on new activity", async () => {
+  const { taskReadStatus } = await import('../nuyoah/taskboard/live-state.mjs');
+  const task = { runtimeStatus: 'completed', activityAt: '2026-10-13T10:00:00Z', updatedAt: '2026-10-13T11:00:00Z' };
+  assert.equal(taskReadStatus(task, { seenAt: task.updatedAt, completedAt: task.updatedAt }), 'unread');
+  const meta = { viewedAt: '2026-10-13T12:00:00Z', viewedActivityAt: task.activityAt };
+  assert.equal(taskReadStatus(task, meta), 'read');
+  assert.equal(statusWithExpiry(task, meta, Date.parse(meta.viewedAt)), 'attention');
+  assert.equal(taskReadStatus({ ...task, updatedAt: '2026-10-14T12:00:00Z' }, meta), 'read');
+  assert.equal(taskReadStatus({ ...task, activityAt: '2026-10-13T10:01:00Z' }, meta), 'unread');
+  assert.equal(taskReadStatus(task, {}), 'unread');
 });

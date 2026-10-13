@@ -1,7 +1,7 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { HostContext } from "../types";
 // @ts-expect-error Shared ESM logic is covered by a focused node:test.
-import { LIVE_TASK_STATUSES, bootstrapRemoteHistory, completionKind, taskAttentionLabel, readLiveView, saveLiveView, liveTaskStatus, sortLiveTasks, visibleLiveTasks } from "../../../../../nuyoah/taskboard/live-state.mjs";
+import { LIVE_TASK_STATUSES, bootstrapRemoteHistory, completionKind, taskReadStatus, taskAttentionLabel, readLiveView, saveLiveView, liveTaskStatus, sortLiveTasks, visibleLiveTasks } from "../../../../../nuyoah/taskboard/live-state.mjs";
 import {
   OrchestratorRequestView,
   readSavedTaskboardView,
@@ -11,11 +11,14 @@ import {
 } from "./OrchestratorRequests";
 import type { CodexTaskboardView } from "./OrchestratorRequests";
 
+// @ts-expect-error Shared renderer preferences are validated by focused node tests.
+import { AUTO_THREAD_METADATA_KEY, readAutoThreadMetadata } from "../../../../../nuyoah/workstation/auto-thread-metadata.mjs";
+
 type RuntimeStatus = "running" | "failed" | "completed" | "unknown";
 type DisplayStatus = "attention" | "failed" | "running" | "completed";
 type TaskGroup = DisplayStatus | "history";
 type TaskSource = "project" | "chatgpt";
-type TaskGroupKey = TaskGroup | `${TaskSource}:${TaskGroup}`;
+type TaskGroupKey = TaskGroup | `${TaskSource}:${TaskGroup}` | `project:attention:${string}`;
 type Priority = "none" | "high" | "urgent";
 type WorkspacePathStatus = "available" | "missing" | "unknown";
 
@@ -57,6 +60,8 @@ interface LiveHostContext extends HostContext {
 }
 
 interface TaskMeta {
+  viewedAt?: string;
+  viewedActivityAt?: string | null;
   seenAt?: string;
   seenActivityAt?: string | null;
   manualPending?: boolean;
@@ -149,10 +154,12 @@ function normalizeThreadId(value?: string) {
 }
 
 export function CodexTaskboard() {
+  const [autoMetadata, setAutoMetadata] = useState(() => readAutoThreadMetadata(window.localStorage));
   const [context, setContext] = useState<LiveHostContext | null>(null);
   const [meta, setMeta] = useState<TaskMetaByThread>(readMeta);
   const [remoteCutoff] = useState(remoteHistoryCutoff);
   const [savedPosition] = useState(() => readLiveView(window.localStorage));
+  const [projectAutoCompleteHours, setProjectAutoCompleteHours] = useState<number>(savedPosition.projectAutoCompleteHours);
   const [query, setQuery] = useState<string>(savedPosition.query);
   const [projectId, setProjectId] = useState<string>(savedPosition.projectId);
   const [visibleCounts, setVisibleCounts] = useState<Partial<Record<TaskGroupKey, number>>>(savedPosition.visibleCounts);
@@ -179,6 +186,17 @@ export function CodexTaskboard() {
       : "all");
 
   useEffect(() => {
+    const refresh = (event: StorageEvent) => { if (event.key === AUTO_THREAD_METADATA_KEY) setAutoMetadata(readAutoThreadMetadata(window.localStorage)); };
+    window.addEventListener("storage", refresh);
+    return () => window.removeEventListener("storage", refresh);
+  }, []);
+
+  function autoTitleAction(action: "enabled" | "locked" | "undo", value?: boolean, task?: LiveTask) {
+    setActionError("");
+    window.parent.postMessage({ type: "taskboard:auto-title", action, value, threadId: task?.threadId, hostId: task?.hostId || "local" }, "*");
+  }
+
+  useEffect(() => {
     function receiveHostMessage(event: MessageEvent) {
       if (event.source !== window.parent || !event.data || typeof event.data !== "object") return;
       if (event.data.type === "taskboard:host-context" && event.data.payload) {
@@ -194,6 +212,10 @@ export function CodexTaskboard() {
         if (next.theme === "light" || next.theme === "dark") {
           document.documentElement.dataset.theme = next.theme;
         }
+      }
+      if (event.data.type === "taskboard:auto-title-result") {
+        setAutoMetadata(readAutoThreadMetadata(window.localStorage));
+        if (!event.data.ok) setActionError(String(event.data.error || "操作未完成。"));
       }
       if (event.data.type === "taskboard:action-result" && event.data.payload?.ok === false) {
         setActionError(String(event.data.payload.error || "操作失败，请重试。"));
@@ -216,9 +238,9 @@ export function CodexTaskboard() {
   }, [undo]);
 
   function savePosition() {
-    saveLiveView(window.localStorage, { query, projectId, visibleCounts, historyOpenBySource, scrollTop: scrollTop.current });
+    saveLiveView(window.localStorage, { query, projectId, projectAutoCompleteHours, visibleCounts, historyOpenBySource, scrollTop: scrollTop.current });
   }
-  useEffect(savePosition, [query, projectId, visibleCounts, historyOpenBySource]);
+  useEffect(savePosition, [query, projectId, projectAutoCompleteHours, visibleCounts, historyOpenBySource]);
   useLayoutEffect(() => {
     const board = boardRef.current;
     if (!snapshot || !board || !restoringScroll.current || view !== "all") return;
@@ -258,8 +280,8 @@ export function CodexTaskboard() {
 
   const presented = useMemo(() => sortLiveTasks(tasks.map((task) => ({
     ...task,
-    displayStatus: liveTaskStatus(task, meta[task.taskKey], clock) as DisplayStatus,
-  })), meta), [clock, meta, tasks]);
+    displayStatus: liveTaskStatus(task, meta[task.taskKey], clock, projectAutoCompleteHours) as DisplayStatus,
+  })), meta), [clock, meta, tasks, projectAutoCompleteHours]);
 
   const grouped = useMemo(() => Object.fromEntries(LIVE_TASK_STATUSES.map((status: DisplayStatus) => [
     status,
@@ -316,6 +338,7 @@ export function CodexTaskboard() {
   }
 
   function openTask(task: LiveTask & { displayStatus: DisplayStatus }) {
+    changeMeta(task.taskKey, { viewedAt: new Date().toISOString(), viewedActivityAt: task.activityAt || task.updatedAt });
     openThread(task.threadId, task.hostId);
   }
 
@@ -358,7 +381,7 @@ export function CodexTaskboard() {
     return (
     <article
       aria-current={isCurrent ? "page" : undefined}
-      className={`codex-live-card is-${task.displayStatus}${isCurrent ? " is-current" : ""}`}
+      className={`codex-live-card is-${task.displayStatus} is-${taskReadStatus(task, meta[task.taskKey])}${isCurrent ? " is-current" : ""}`}
       data-current-task={isCurrent ? "true" : undefined}
       data-thread-id={task.threadId}
       data-host-id={task.hostId || "local"}
@@ -372,8 +395,9 @@ export function CodexTaskboard() {
         </span>
         <strong>{task.title}</strong>
         <span className="codex-live-card-meta">
+          <span className={`codex-live-read-marker is-${taskReadStatus(task, meta[task.taskKey])}`}>{taskReadStatus(task, meta[task.taskKey]) === "read" ? "已查看" : "未查看"}</span>
           {task.displayStatus === "attention" && <span className="codex-live-reason">{taskAttentionLabel(task, meta[task.taskKey])}</span>}
-          <span className="codex-live-time">{task.runtimeStatus === "unknown" ? "状态待同步" : task.displayStatus === "completed" ? completionKind(meta[task.taskKey], task, clock) === "history" ? "历史记录" : completionKind(meta[task.taskKey], task, clock) === "automatic" ? "已完成" : "已确认完成" : STATUS_LABELS[task.displayStatus]} · {updatedLabel(task.updatedAt)}</span>
+          <span className="codex-live-time">{task.runtimeStatus === "unknown" ? "状态待同步" : task.displayStatus === "completed" ? completionKind(meta[task.taskKey], task, clock, projectAutoCompleteHours) === "history" ? "历史记录" : completionKind(meta[task.taskKey], task, clock, projectAutoCompleteHours) === "automatic" ? "已完成" : "已确认完成" : STATUS_LABELS[task.displayStatus]} · {updatedLabel(task.updatedAt)}</span>
         </span>
         <span className="codex-live-progress">{task.progress}</span>
       </button>
@@ -404,6 +428,13 @@ export function CodexTaskboard() {
               : `当前项目目录 · ${workspaceLabel(task.projectWorkspacePath)}`}
           </span>
         )}
+        {(task.hostId || "local") === "local" && <div className="codex-live-title-actions">
+          <label><input type="checkbox" checked={autoMetadata.entries[task.threadId]?.locked === true}
+            onChange={event => autoTitleAction("locked", event.target.checked, task)} />锁定标题</label>
+          {autoMetadata.entries[task.threadId]?.previousTitle && <button type="button" onClick={() => autoTitleAction("undo", undefined, task)}>恢复上个标题</button>}
+          {["generation-failed", "unavailable"].includes(autoMetadata.entries[task.threadId]?.status) && <span>自动命名暂未成功，保留原名</span>}
+          {autoMetadata.entries[task.threadId]?.status === "write-unknown" && <span>标题更新结果待确认</span>}
+        </div>}
       </details>}
       <div className="codex-live-card-actions">
         <button
@@ -437,13 +468,13 @@ export function CodexTaskboard() {
     </article>
     );
   }
-  function renderGroup(all: PresentedTask[], group: TaskGroup, source: TaskSource) {
-    const key: TaskGroupKey = `${source}:${group}`;
-    const visibleCount = visibleCounts[key] ?? visibleCounts[group] ?? DEFAULT_VISIBLE_TASKS;
+  function renderGroup(all: PresentedTask[], group: TaskGroup, source: TaskSource, device?: { id: string; label: string }) {
+    const key: TaskGroupKey = device ? `project:attention:${encodeURIComponent(device.id)}` : `${source}:${group}`;
+    const visibleCount = visibleCounts[key] ?? (device ? DEFAULT_VISIBLE_TASKS : visibleCounts[group]) ?? DEFAULT_VISIBLE_TASKS;
     const visible = visibleLiveTasks(all, visibleCount) as PresentedTask[];
     const remaining = Math.max(0, all.length - visible.length);
-    return <div className="codex-live-list">
-      {visible.length ? visible.map(renderCard) : <p className="codex-live-column-empty">{group === "completed" ? "暂无已确认完成的任务" : "暂无任务"}</p>}
+    return <div className="codex-live-list" tabIndex={0} role="region" aria-label={`${source === "project" ? "项目任务" : "ChatGPT 聊天"} · ${group === "history" ? "历史记录" : STATUS_LABELS[group]}${device ? ` · ${device.label}` : ""}`}>
+      {visible.length ? visible.map(renderCard) : <p className="codex-live-column-empty">{group === "completed" ? "暂无已完成的任务" : "暂无任务"}</p>}
       {remaining > 0 && <button className="codex-live-more" type="button" onClick={() => setVisibleCounts(current => ({ ...current,
         [key]: visibleCount + VISIBLE_TASK_STEP,
       }))}>再显示 {Math.min(VISIBLE_TASK_STEP, remaining)} 个</button>}
@@ -451,6 +482,21 @@ export function CodexTaskboard() {
         [key]: DEFAULT_VISIBLE_TASKS,
       }))}>收起</button>}
     </div>;
+  }
+
+  function renderAttentionRows(tasks: PresentedTask[]) {
+    const devices = new Map<string, string>([["local", "本机"]]);
+    for (const task of tasks) {
+      const hostId = task.hostId || "local";
+      if (hostId !== "local") devices.set(hostId, task.hostName || "远程设备");
+    }
+    return [...devices].map(([id, label]) => {
+      const entries = tasks.filter(task => (task.hostId || "local") === id);
+      return <section className="codex-live-device-row" data-device-id={id} key={id} aria-label={label}>
+        <header><h4>{label}</h4><span>{entries.length}</span></header>
+        {renderGroup(entries, "attention", "project", { id, label })}
+      </section>;
+    });
   }
 
   if (!snapshot) {
@@ -539,14 +585,29 @@ export function CodexTaskboard() {
           const historyOpen = historyOpenBySource[source];
           return <section className="codex-live-source" key={source} data-task-source={source} aria-labelledby={`live-source-${source}`}>
             <header><h2 id={`live-source-${source}`}>{source === "chatgpt" ? "ChatGPT 聊天" : "项目任务"}</h2><span>{sourceTasks.length}</span></header>
+            {source === "project" && <label className="codex-live-auto-naming">
+              <input type="checkbox" checked={autoMetadata.enabled} onChange={event => autoTitleAction("enabled", event.target.checked)} />
+              本机对话自动命名
+            </label>}
+            {source === "project" && <label className="codex-live-auto-complete">
+              <span>待处理自动完成</span>
+              <select aria-label="项目任务待处理自动完成时长" value={projectAutoCompleteHours}
+                onChange={event => setProjectAutoCompleteHours(Number(event.target.value))}>
+                <option value={0}>关闭</option>
+                <option value={24}>24 小时无新回复</option>
+                <option value={48}>48 小时无新回复</option>
+                <option value={72}>72 小时无新回复</option>
+                <option value={168}>7 天无新回复</option>
+              </select>
+            </label>}
             <div className="codex-live-source-groups">
               {LIVE_TASK_STATUSES.map((status: DisplayStatus) => {
                 const all = sourceTasks.filter((task: PresentedTask) => task.displayStatus === status);
-                const confirmed = status === "completed" ? all.filter((task: PresentedTask) => completionKind(meta[task.taskKey], task, clock) !== "history") : all;
-                const history = status === "completed" ? all.filter((task: PresentedTask) => completionKind(meta[task.taskKey], task, clock) === "history") : [];
+                const confirmed = status === "completed" ? all.filter((task: PresentedTask) => completionKind(meta[task.taskKey], task, clock, projectAutoCompleteHours) !== "history") : all;
+                const history = status === "completed" ? all.filter((task: PresentedTask) => completionKind(meta[task.taskKey], task, clock, projectAutoCompleteHours) === "history") : [];
                 return <section className={`codex-live-column is-${status}`} key={status} aria-labelledby={`live-column-${source}-${status}`}>
                   <header><span className="codex-live-status-dot" aria-hidden="true" /><h3 id={`live-column-${source}-${status}`}>{STATUS_LABELS[status]}</h3><span>{confirmed.length}</span></header>
-                  {renderGroup(confirmed, status, source)}
+                  {source === "project" && status === "attention" ? renderAttentionRows(confirmed) : renderGroup(confirmed, status, source)}
                   {status === "completed" && history.length > 0 && <details className="codex-live-history" open={historyOpen}
                     onToggle={event => { const open = event.currentTarget.open; if (open !== historyOpen) setHistoryOpenBySource(current => ({ ...current, [source]: open })); }}>
                     <summary>历史记录 <span>{history.length}</span></summary>

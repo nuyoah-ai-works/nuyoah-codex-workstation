@@ -21,7 +21,9 @@ try {
     const legacy = document.querySelectorAll('#codex-sidebar-shortcut-grid, #codex-sidebar-section-tabs, #codex-sidebar-folder-switcher, #codex-taskboard-entry, [data-codex-conversation-preview-enhanced]');
     const active = document.querySelector('[data-app-action-sidebar-thread-active="true"], [data-app-action-sidebar-thread-selected="true"], [data-app-action-sidebar-thread-row][aria-current="page"]');
     const activeThreadId = active?.getAttribute('data-app-action-sidebar-thread-id')?.replace(/^(?:local|cloud):/i, '') || '';
-    return workstation && legacy.length === 0 && window.__codexConversationPreviewInjection__?.sidebarMode === 'native'
+    const mode = window.__codexConversationPreviewInjection__?.sidebarMode;
+    const sidebarReady = mode === 'native' || (mode === 'capsules' && window.__nuyoahCapsuleSidebar__?.visible?.());
+    return workstation && legacy.length === 0 && sidebarReady
       ? { label: workstation.textContent.trim(), legacyCount: legacy.length, activeThreadId }
       : null;
   })()`);

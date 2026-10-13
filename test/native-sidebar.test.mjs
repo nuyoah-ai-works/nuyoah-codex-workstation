@@ -79,13 +79,13 @@ test('native sidebar stays intact while the isolated workstation opens, closes a
     await page.evaluate(() => {
       window.__NUYOAH_WORKSTATION_CONFIG__ = {};
       window.__CODEX_TASKBOARD_URL__ = `${location.origin}/?host=codex`;
-      window.catalogRequests = []; window.catalogRawSends = 0;
+      window.catalogRequests = []; window.catalogRawSends = 0; window.chatCatalogReads = 0;
       window.electronBridge = {
         getSharedObjectSnapshotValue: () => [], getInitialSidebarBootstrap: () => ({ catalogEntries: [] }),
         sendMessageFromView: () => { window.catalogRawSends++; throw new Error('Raw host transport must not run'); },
       };
       window.__nuyoahNativeTaskAdapter__ = {
-        listChatGptThreads: async () => [],
+        listChatGptThreads: async () => { window.chatCatalogReads++; return []; },
         listThreads: (hostId, params, { signal }) => new Promise((resolve, reject) => {
           const request = { hostId, params, aborted: false, resolve };
           window.catalogRequests.push(request);
@@ -115,6 +115,7 @@ test('native sidebar stays intact while the isolated workstation opens, closes a
     await page.waitForFunction(() => window.__codexConversationPreviewInjection__.isWorkstationVisible());
     await page.waitForFunction(() => window.catalogRequests.length === 1);
     assert.equal(await page.locator('#nuyoah-workstation-project-page').isVisible(), true);
+    assert.equal(await page.evaluate(() => window.chatCatalogReads), 0, 'the project panel does not poll ChatGPT');
     assert.equal(await page.locator('aside').evaluate(node => node.outerHTML), baseline);
     const renderCounts = await page.evaluate(() => {
       const api = window.__codexConversationPreviewInjection__;
@@ -138,6 +139,7 @@ test('native sidebar stays intact while the isolated workstation opens, closes a
     await page.evaluate(() => window.__codexConversationPreviewInjection__.openWorkstationPanel('taskboard'));
     await page.waitForFunction(() => window.catalogRequests.length === 2);
     assert.equal(await page.locator('#codex-taskboard-page').isVisible(), true);
+    await page.waitForFunction(() => window.chatCatalogReads === 1);
     assert.equal(await page.locator('aside').evaluate(node => node.outerHTML), baseline);
     assert.equal(await page.evaluate(() => window.nativeClicks), 0);
     await page.evaluate(() => {
@@ -145,6 +147,9 @@ test('native sidebar stays intact while the isolated workstation opens, closes a
       window.__codexTaskboardInjection__.close(false);
     });
     await page.waitForFunction(() => window.catalogRequests[1].aborted);
+    assert.equal(await page.evaluate(async () => {
+      await window.__nuyoahChatGptCatalog__.refresh(); return window.chatCatalogReads;
+    }), 1, 'closing the task panel stops ChatGPT reads');
     assert.equal(await page.locator('#codex-taskboard-entry').count(), 0);
     assert.equal(await page.evaluate(() => window.catalogRawSends), 0);
     await page.addScriptTag({ content: source });

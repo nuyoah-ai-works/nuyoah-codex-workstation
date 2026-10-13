@@ -115,7 +115,10 @@ export async function startAssetServer({ stateRoot, token, port = 5177, taskStor
         if (asset.kind === 'image' || asset.kind === 'video' && asset.thumbnail && url.searchParams.get('thumbnail') === '1') {
           const image = await previews.image(asset,{ detail:url.searchParams.get('detail') === '1',signal:controller.signal });
           if (res.destroyed) return;
-          res.writeHead(200,{'content-type':image.type,'content-length':image.body.length,'cache-control':'private, max-age=300', 'x-preview-unavailable':image.unavailable ? '1' : '0'}); res.end(image.body);
+          res.writeHead(200,{'content-type':image.type,'content-length':image.body.length,
+            'cache-control':image.unavailable ? 'no-store' : 'private, max-age=300',
+            'x-preview-unavailable':image.unavailable ? '1' : '0',
+            ...(image.reason ? { 'x-preview-error':image.reason } : {}) }); res.end(image.body);
           void previews.prune().catch(()=>{}); return;
         }
         if (!['audio','video'].includes(asset.kind)) { json(res,{error:'此文件不支持媒体预览'},415); return; }

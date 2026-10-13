@@ -41,7 +41,8 @@ function fixture(overrides = {}) {
     return overrides.create ? overrides.create(params) : { status: 'created', conversationId: childId,
       firstTurn: { status: 'accepted', turnId: 'fixture-child-turn' } };
   }
-  const scope = { scope: { __scopeBrand: 'AppScope' }, query: { getOrFetch: async () => overrides.pins || [] }, get: selector => selector === selectors.permissions ? permissions
+  const scope = { scope: { __scopeBrand: 'AppScope' }, queryClient: { getQueryCache: () => ({ getAll: () => overrides.queries || [] }) },
+    query: { getOrFetch: async () => overrides.pins || [] }, get: selector => selector === selectors.permissions ? permissions
     : selector === selectors.workspaceKind ? 'project' : selector === selectors.assignments
       ? { [threadId]: { projectKind: 'local', projectId: 'fixture-project' } } : mode, set() {} };
   const window = { document: { scripts: [{ src: entry }] },
@@ -52,7 +53,7 @@ function fixture(overrides = {}) {
     assert.equal(url, moduleUrl);
     return { module: { managerGetter, nativeCreate, ...selectors, ...overrides.module }, source: overrides.source ?? source };
   };
-  return { adapter: createNativeTaskMapAdapter({ window, loadModule }), window, loadModule, calls, fetched, disposed, permissions, mode };
+  return { adapter: createNativeTaskMapAdapter({ window, loadModule }), window, scope, loadModule, calls, fetched, disposed, permissions, mode };
 }
 
 test('inspect dynamically resolves a current local asset and projects a bounded final only', async () => {
@@ -255,4 +256,36 @@ test('ChatGPT source reuses native recent metadata and strips snippets, bodies a
   assert.deepEqual(result, [{ id: threadId, title: '虚构聊天', status: 'active', updatedAt: 1790000000, pinned: false }]);
   assert.equal(f.calls.length, 0, 'ChatGPT listing must not call Codex readThread or turns/items');
   await assert.rejects(fixture().adapter.listChatGptThreads(), /不支持/);
+});
+
+test('native account failures block optional ChatGPT network reads and resume only after native recovery', async () => {
+  let pins = 0, lists = 0, gate = 'error';
+  const query = { queryKey: ['usage-settings', 'fixture-account'], isActive: () => true,
+    get state() { return { status: gate, data: gate === 'success' ? {} : undefined }; } };
+  async function nativeChats() {
+    // Discovery anchors: Failed to list ChatGPT threads pinnedThreads scope.query.getOrFetch(pinnedNative)
+    lists++;
+    return { isUnavailable: false, pinnedThreads: [], threads: [] };
+  }
+  function initializeChats() {}
+  const f = fixture({ queries: [query], module: { nativeChats, initializeChats, chatPins: { resolve() {} } },
+    source: source.replace('export{', 'function chatInit(){ const key = `chatgpt-thread-list`; }export{chatInit as initializeChats,pinnedNative as chatPins,') });
+  f.scope.query.getOrFetch = async () => { pins++; return []; };
+  for (gate of ['error', 'pending']) await assert.rejects(f.adapter.listChatGptThreads(), { code: 'settings_unavailable' });
+  assert.equal(pins, 0); assert.equal(lists, 0);
+  gate = 'success'; await f.adapter.listChatGptThreads(); assert.equal(pins, 1); assert.equal(lists, 1);
+  gate = 'error'; query.isActive = () => false;
+  await f.adapter.listChatGptThreads(); assert.equal(lists, 2, 'inactive historical errors do not block the current account');
+  query.isActive = () => true; query.queryKey = ['accounts', 'optimized', 'old-account'];
+  await f.adapter.listChatGptThreads(); assert.equal(lists, 3, 'an old optimized check is not the current workspace-policy gate');
+  query.queryKey = ['accounts', 'settings', 'fixture-account']; gate = 'success';
+  f.scope.query.getOrFetch = async () => { pins++; gate = 'error'; return []; };
+  await assert.rejects(f.adapter.listChatGptThreads(), { code: 'settings_unavailable' });
+  assert.equal(lists, 3, 'account failure during pin loading stops the next request');
+  gate = 'success'; f.scope.query.getOrFetch = async () => [];
+  query.queryKey = ['workspace-policy', 'fixture-account'];
+  // A failure after the helper returned an empty list must not erase old cards.
+  let checks = 0;
+  query.isActive = () => { if (++checks === 3) gate = 'error'; return true; };
+  await assert.rejects(f.adapter.listChatGptThreads(), { code: 'settings_unavailable' });
 });

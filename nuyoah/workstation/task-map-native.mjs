@@ -102,7 +102,7 @@ export function createNativeTaskMapAdapter({ window: hostWindow, loadModule } = 
       const source = imported?.source ?? await sourceAt(url, 18000000);
       const rpcGetter = candidate => onlyFunction(candidate, ['AppServerManager RPC is not connected', '.forHost('])
         || onlyFunction(candidate, ['AppServerManager RPC is unavailable for hostId:', '.forHost(']);
-      let getClient = rpcGetter(module);
+      let getClient = rpcGetter(module), sharedModule = module, sharedSource = source;
       if (!getClient) {
         // Updated shells move the registered RPC accessor into app-shared.
         // Follow only this explicit local import; never scan unrelated bundles.
@@ -110,12 +110,14 @@ export function createNativeTaskMapAdapter({ window: hostWindow, loadModule } = 
         if (sharedImports.length === 1) {
           const sharedUrl = localAsset(sharedImports[0], url);
           const shared = loadModule ? await loadModule(sharedUrl) : await import(sharedUrl);
-          getClient = rpcGetter(shared?.module || shared);
+          sharedModule = shared?.module || shared;
+          sharedSource = shared?.source ?? await sourceAt(sharedUrl, 18000000);
+          getClient = rpcGetter(sharedModule);
         }
       }
       const createThread = onlyFunction(module, ['preparePrimaryRuntimeForFirstTurn', 'readThreadCreationInputs', '.startConversation(']);
       const listChats = onlyFunction(module, ['Failed to list ChatGPT threads', 'pinnedThreads']);
-      return { getClient, createThread, listChats,
+      return { getClient, createThread, listChats, sharedModule, sharedSource,
         chatPins: exportedSelector(module, source, sourceOf(listChats).match(/\.query\.getOrFetch\(([\w$]+)\)/)),
         initializeChats: chatInitializer(module, source), permissions: selectorExport(module, source, 'currentPermissions'),
         collaborationMode: selectorExport(module, source, 'latestCollaborationMode'),
@@ -270,16 +272,33 @@ export function createNativeTaskMapAdapter({ window: hostWindow, loadModule } = 
     try { return await Promise.race([pending, cancelled]); }
     finally { signal?.removeEventListener('abort', abort); dispose(pending); }
   }
+  function assertChatAccountReady(scope) {
+    const queries = scope.queryClient?.getQueryCache?.()?.getAll?.();
+    if (!Array.isArray(queries)) throw fail('incompatible');
+    for (const query of queries) {
+      const [kind, detail] = query.queryKey || [];
+      const accountInput = kind === 'usage-settings' || kind === 'workspace-policy'
+        || (kind === 'accounts' && ['check', 'settings'].includes(detail));
+      // Inspect only active native account inputs. Historical/disabled account
+      // errors must not block a different account; never refetch or clear them.
+      if (!accountInput || query.isActive?.() !== true) continue;
+      if (query.state?.status === 'error'
+        || (query.state?.status === 'pending' && query.state?.data == null)) throw fail('settings_unavailable');
+    }
+  }
   async function listChatGptThreads() {
     const { scope, listChats, initializeChats, chatPins } = await runtime(null);
     if (!listChats || !initializeChats || !chatPins) throw fail('incompatible');
+    assertChatAccountReady(scope);
     // Native metadata query only; never call conversation read or copy snippets.
     initializeChats();
     const pins = await scope.query.getOrFetch(chatPins);
+    assertChatAccountReady(scope);
     if (!Array.isArray(pins) || pins.length > 100) throw fail('incompatible');
     // The native list helper adds pinned count to limit before its HTTP request.
     // The endpoint accepts at most 100 total, including those pinned slots.
     const result = await listChats({ scope, limit: 100 - pins.length, query: '' });
+    assertChatAccountReady(scope);
     if (result?.isUnavailable) throw fail('unavailable');
     if (!Array.isArray(result?.threads) || !Array.isArray(result?.pinnedThreads)) throw fail('incompatible');
     const pinned = new Set(result.pinnedThreads.map(item => item.id));
@@ -287,5 +306,152 @@ export function createNativeTaskMapAdapter({ window: hostWindow, loadModule } = 
       .map(item => ({ id: item.id.toLowerCase(), title: clean(item.title) || '未命名聊天', status: item.status,
         updatedAt: item.updatedAt, pinned: pinned.has(item.id) }));
   }
-  return { inspect, readTaskMetadata, send, create, listThreads, listChatGptThreads };
+  async function metadataSession() {
+    const { scope, client, sharedModule: module, sharedSource: source } = await runtime('local');
+    const services = Object.values(module).filter(value => value && typeof value === 'object'
+      && typeof value.threadMetadataGeneration?.generateTitle === 'function');
+    const completed = exportedSelector(module, source, source.match(/([\w$]+)=[\w$]+\([^,]+,null,\{onMount:[\s\S]{0,400}?event:`turn-completed`/));
+    const descriptionNames = source.match(/([\w$]+)=`thread-descriptions-v1`,([\w$]+)=[\w$]+\(\1,\{\}\)/);
+    const getDescription = descriptionNames && onlyFunction(module, [`.get(${descriptionNames[2]})[`, '??null']);
+    const setDescription = descriptionNames && onlyFunction(module, [`.set(${descriptionNames[2]},`, `${descriptionNames[1]},`]);
+    if (services.length !== 1 || !completed || !getDescription || !setDescription || typeof scope.watch !== 'function') throw fail('incompatible');
+    async function currentState(id) {
+      let subscription, timer, resolve;
+      const value = new Promise(done => { resolve = done; });
+      const pending = client.subscribe({ type: 'thread', key: { hostId: 'local', threadId: id },
+        field: 'listState', listener: state => resolve(state) });
+      try {
+        subscription = await pending;
+        timer = hostWindow.setTimeout(() => resolve(null), 5000);
+        return await value;
+      } finally { if (timer) hostWindow.clearTimeout(timer); dispose(subscription); dispose(pending); }
+    }
+    async function read(id, turnId, includeText = false) {
+      if (!uuid(id)) throw fail('invalid_target');
+      let response;
+      try { response = await call(client, 'readThread', id, { includeTurns: false }); }
+      catch (error) { if (/thread (?:not loaded|not found)/i.test(String(error?.message))) return null; throw error; }
+      const thread = response?.thread;
+      if (!thread || thread.id !== id || thread.ephemeral || thread.parentThreadId || thread.status?.type !== 'idle') return null;
+      if (thread.source && typeof thread.source === 'object' && thread.source.subAgent) return null;
+      let state;
+      try { state = await currentState(id); }
+      catch (error) { if (/thread (?:not loaded|not found)/i.test(String(error?.message))) return null; throw error; }
+      if (!state || state.ephemeral || state.sideConversation || state.isConversationInProgress
+        || state.latestTurnId !== turnId || state.latestTurnStatus !== 'completed') return null;
+      const result = { title: clean(thread.name, 160), description: clean(getDescription(scope, id), 100), turnId, user: '', assistant: '' };
+      if (!includeText) return result;
+      // The native reader projects bounded text only, excluding tool outputs,
+      // reasoning and attachments. It works with both native history formats.
+      const messages = await call(client, 'readRecentThreadMessages', id, { maxItems: 16, maxTextLength: 2000 });
+      if (!Array.isArray(messages)) return null;
+      for (const message of messages.slice(-16).reverse()) {
+        if (message.role === 'user' && !result.user) result.user = String(message.text || '').slice(0, 2000);
+        if (message.role === 'assistant' && !result.assistant) result.assistant = String(message.text || '').slice(0, 2000);
+      }
+      // Carry earlier user intent from the same already-bounded native projection.
+      // No additional history read and no transcript persistence.
+      const requests = messages.slice(-16).filter(message => message.role === 'user')
+        .map(message => String(message.text || '').slice(0, 500)).filter(Boolean);
+      result.recentRequests = requests.slice(0, -1).slice(-8);
+      // Long turns can push the user message outside the small window. The old
+      // description plus final response still suffice; do not scan older history.
+      return result.assistant ? result : null;
+    }
+    return {
+      subscribe(callback) {
+        let first = true;
+        return scope.watch(({ get }) => {
+          const event = get(completed);
+          if (first) { first = false; return; }
+          if (event?.hostId === 'local') callback({ hostId: 'local', threadId: event.conversationId,
+            turnId: event.turnId, status: event.status, hasPendingContinuation: event.hasPendingContinuation });
+        });
+      },
+      read,
+      async generate(prompt, { signal } = {}) {
+        // The native metadata helper permits provider/model fallback. Keep its
+        // ephemeral, read-only shape but explicitly forbid that costly fallback.
+        const models = { model: 'gpt-6-luna', modelProvider: 'openai' };
+        const config = { project_doc_max_bytes: 0, include_environment_context: false,
+          include_permissions_instructions: false, include_apps_instructions: false,
+          'features.hooks': false, 'features.apps': false, 'features.plugins': false,
+          'features.multi_agent': false, 'features.multi_agent_v2': false,
+          'features.enable_fanout': false, 'features.shell_tool': false,
+          'features.unified_exec': false, 'features.shell_snapshot': false,
+          'features.apply_patch_freeform': false, 'features.js_repl': false,
+          'features.js_repl_tools_only': false, 'features.code_mode': false,
+          'features.code_mode_only': false, 'features.tool_suggest': false,
+          web_search: 'disabled', memories: { use_memories: false, generate_memories: false },
+          skills: { bundled: { enabled: false }, config: [] },
+        };
+        const servers = await call(client, 'sendRequest', 'mcpServerStatus/list', { limit: 100 });
+        if (!Array.isArray(servers?.data) || servers.nextCursor) throw fail('incompatible');
+        const configured = await call(client, 'sendRequest', 'config/read', { includeLayers: false });
+        const configuredServers = configured?.config?.mcp_servers || {};
+        const names = new Set([...Object.keys(configuredServers), ...servers.data.map(server => server.name)]);
+        for (const name of names) {
+          if (typeof name !== 'string' || !/^[\w-]+$/.test(name)) throw fail('incompatible');
+          // Existing transports must remain structurally valid. Runtime-only
+          // app servers have no config transport, so use the native disabled stub.
+          config[`mcp_servers.${name}`] = Object.hasOwn(configuredServers, name)
+            ? { enabled: false } : { enabled: false, command: '' };
+        }
+        signal?.throwIfAborted();
+        const created = await call(client, 'sendRequest', 'thread/start', {
+          ...models, allowProviderModelFallback: false, serviceTier: null, cwd: null,
+          approvalPolicy: 'never', permissions: ':read-only', runtimeWorkspaceRoots: [],
+          config, baseInstructions: 'Only return the requested JSON metadata. Make zero tool calls.',
+          developerInstructions: '', ephemeral: true, threadSource: 'conversation_digest', dynamicTools: [],
+        });
+        const id = created?.thread?.id;
+        if (!uuid(id)) throw fail('unavailable');
+        let subscription, pendingSubscription, turnId, done = false, output = '', timeout;
+        let resolveDone, rejectDone;
+        const finished = new Promise((resolve, reject) => { resolveDone = resolve; rejectDone = reject; });
+        // Avoid an unhandled rejection if cancellation happens before turn/start returns.
+        finished.catch(() => {});
+        const abort = () => rejectDone(new Error('Metadata generation canceled'));
+        signal?.addEventListener('abort', abort, { once: true });
+        try {
+          if (created.model !== models.model || created.modelProvider !== models.modelProvider || created.thread.ephemeral !== true) throw fail('incompatible');
+          signal?.throwIfAborted();
+          pendingSubscription = client.subscribe({ type: 'notification', key: { hostId: 'local' },
+            methods: ['item/agentMessage/delta', 'item/completed', 'turn/completed'], listener: event => {
+              if (event.params?.threadId !== id) return;
+              if (event.method === 'item/agentMessage/delta') output = (output + String(event.params.delta || '')).slice(0, 4000);
+              if (event.method === 'item/completed' && event.params.item?.type === 'agentMessage') output = String(event.params.item.text || '').slice(0, 4000);
+              if (event.method === 'turn/completed') {
+                done = true;
+                event.params.turn?.status === 'completed' ? resolveDone(output) : rejectDone(new Error('Metadata generation failed'));
+              }
+            },
+          });
+          subscription = await pendingSubscription;
+          const started = await call(client, 'sendRequest', 'turn/start', { threadId: id,
+            input: [{ type: 'text', text: prompt, text_elements: [] }], model: models.model, effort: 'low',
+            outputSchema: { type: 'object', properties: { title: { type: 'string', maxLength: 36 },
+              description: { type: 'string', maxLength: 100 } }, required: ['title', 'description'], additionalProperties: false },
+          });
+          turnId = started?.turn?.id;
+          timeout = hostWindow.setTimeout(() => rejectDone(new Error('Metadata generation timed out')), 35000);
+          const text = await finished;
+          signal?.throwIfAborted();
+          if (!text.trim()) throw fail('unavailable');
+          return JSON.parse(text);
+        } finally {
+          if (timeout) hostWindow.clearTimeout(timeout);
+          signal?.removeEventListener('abort', abort);
+          dispose(subscription); dispose(pendingSubscription);
+          if (!done && turnId) await call(client, 'sendRequest', 'turn/interrupt', { threadId: id, turnId }).catch(() => {});
+          await call(client, 'sendRequest', 'thread/unsubscribe', { threadId: id }).catch(() => {});
+        }
+      },
+      async rename(id, title, expectedTitle) {
+        return call(client, 'setThreadTitle', id, title, { expectedTitle, requireAcknowledgement: true });
+      },
+      setDescription: (id, text) => setDescription(scope, id, text),
+    };
+  }
+  return { inspect, readTaskMetadata, send, create, listThreads, listChatGptThreads, metadataSession };
 }

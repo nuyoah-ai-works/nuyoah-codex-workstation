@@ -49,3 +49,61 @@ test('current-task assets follow project changes, retain the filter and recover 
     assert.deepEqual(errors, []);
   } finally { await browser?.close(); await app?.close(); await rm(root, { recursive: true, force: true }); }
 });
+
+test('task switches clear stale cards on failure and visible tasks refresh without redrawing unchanged assets', {
+  skip: !process.env.NUYOAH_PLAYWRIGHT_MODULE, timeout: 60000,
+}, async () => {
+  const { chromium } = await import(process.env.NUYOAH_PLAYWRIGHT_MODULE);
+  const root = await mkdtemp(path.join(os.tmpdir(), 'asset-refresh-'));
+  const token = 'fixture-asset-refresh-token-01234567890123456789';
+  const ids = ['00000000-0000-4000-8000-000000000011', '00000000-0000-4000-8000-000000000012'];
+  let app, browser, failSecond = false, added = false;
+  try {
+    await writeFile(path.join(root, 'first.md'), '# First task');
+    await writeFile(path.join(root, 'second.png'), Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+a7x8AAAAASUVORK5CYII=', 'base64'));
+    await writeFile(path.join(root, 'added.md'), '# Newly delivered');
+    app = await startAssetServer({ stateRoot: path.join(root, 'state'), token, port: 0,
+      taskStore: { view: async () => ({ excludedReferencePaths: [], references: [] }) },
+      automatic: { view: async id => {
+        if (id === ids[1] && failSecond) throw new Error('fixture lookup failed');
+        const names = id === ids[0] ? ['first.md'] : added ? ['second.png', 'added.md'] : ['second.png'];
+        return { status: 'ready', references: names.map(name => ({ path: path.join(root, name), relation: 'output' })) };
+      } },
+    });
+    browser = await chromium.launch({ executablePath: process.env.NUYOAH_TEST_BROWSER, headless: true });
+    const page = await browser.newPage({ viewport: { width: 1000, height: 800 }, extraHTTPHeaders: { 'x-asset-console-token': token } });
+    page.setDefaultTimeout(5000); await page.clock.install();
+    let permissionBlocked = true;
+    await page.route('**/media?*', async route => {
+      if (permissionBlocked) return route.fulfill({ status: 200, contentType: 'image/svg+xml',
+        headers: { 'x-preview-unavailable': '1', 'x-preview-error': 'source_EPERM', 'cache-control': 'no-store' }, body: '<svg xmlns="http://www.w3.org/2000/svg"/>' });
+      return route.fulfill({ status: 200, contentType: 'image/png', body: await (await import('node:fs/promises')).readFile(path.join(root, 'second.png')) });
+    });
+    await page.goto(`http://127.0.0.1:${app.server.address().port}/?threadId=${ids[0]}&projectId=fixture-project&threadTitle=First`);
+    await page.locator('#taskButton').click(); await page.getByText('first.md', { exact: true }).waitFor();
+    failSecond = true;
+    await page.evaluate(threadId => window.postMessage({ source: 'codex-sidebar-enhancer', action: 'context', hostId: 'local',
+      threadId, threadTitle: 'Second', projectId: 'fixture-project' }, '*'), ids[1]);
+    await page.locator('#notice').filter({ hasText: 'fixture lookup failed' }).waitFor();
+    assert.equal(await page.locator('#sourceStatus').textContent(), 'Second');
+    assert.equal(await page.locator('.asset-card').count(), 0);
+    assert.doesNotMatch(await page.locator('#notice').textContent(), /已保留/);
+    failSecond = false; await page.locator('#scanButton').click(); await page.getByText('second.png', { exact: true }).waitFor();
+    await page.getByText('需要文件夹访问权限', { exact: true }).waitFor();
+    await page.locator('.asset-thumb').click();
+    await page.locator('#previewStage').filter({ hasText: '需要允许文件夹访问' }).waitFor();
+    await page.keyboard.press('Escape');
+    permissionBlocked = false; await page.locator('#scanButton').click();
+    await page.waitForFunction(() => document.querySelector('.asset-thumb img')?.naturalWidth > 0);
+    assert.equal(await page.locator('.thumbnail-status').count(), 0);
+    const oldImageUrl = await page.locator('.asset-thumb img').getAttribute('src');
+    await page.clock.fastForward(1); await page.locator('#scanButton').click();
+    await page.waitForFunction(old => {const img=document.querySelector('.asset-thumb img');return img?.naturalWidth>0 && img.getAttribute('src')!==old;}, oldImageUrl);
+    added = true; await page.clock.fastForward(10000); await page.getByText('added.md', { exact: true }).waitFor();
+    await page.evaluate(() => { window.fixtureCard = document.querySelector('.asset-card'); });
+    const refreshed = page.waitForResponse(r => new URL(r.url()).pathname === '/api/assets');
+    await page.clock.fastForward(10000); await refreshed;
+    await page.waitForFunction(() => document.querySelector('#assetGrid').getAttribute('aria-busy') === 'false');
+    assert.equal(await page.evaluate(() => window.fixtureCard === document.querySelector('.asset-card')), true);
+  } finally { await browser?.close(); await app?.close(); await rm(root, { recursive: true, force: true }); }
+});

@@ -19,9 +19,19 @@ function chatgptAttentionExpired(task, now = Date.now()) {
   return lastActivity > 0 && now - lastActivity >= 72 * 60 * 60 * 1000;
 }
 
-export function liveTaskStatus(task, meta = {}, now = Date.now()) {
+export function projectAttentionExpired(task, meta = {}, now = Date.now(), hours = 48) {
+  if (task?.source === "chatgpt" || task?.runtimeStatus !== "completed"
+    || task.waitingReason === "input" || task.waitingReason === "approval") return false;
+  if (!Number.isFinite(hours) || hours <= 0) return false;
+  const activity = time(Object.hasOwn(task, "activityAt") ? task.activityAt : task.updatedAt);
+  if (!activity) return false;
+  const since = Math.max(activity, meta.manualPending ? time(meta.statusChangedAt) : 0);
+  return now - since >= hours * 3600000;
+}
+
+export function liveTaskStatus(task, meta = {}, now = Date.now(), hours = 48) {
   if (task?.source === "chatgpt" && task.runtimeStatus === "running") return "running";
-  const attention = chatgptAttentionExpired(task, now) ? "completed" : "attention";
+  const attention = chatgptAttentionExpired(task, now) || projectAttentionExpired(task, meta, now, hours) ? "completed" : "attention";
   if (task?.waitingReason === "input" || task?.waitingReason === "approval") return attention;
   if (task?.runtimeStatus === "running") return "running";
   if (meta.manualPending === true) return attention;
@@ -36,14 +46,22 @@ export function liveTaskStatus(task, meta = {}, now = Date.now()) {
   return changed ? attention : "completed";
 }
 
-export function completionKind(meta = {}, task, now = Date.now()) {
+export function completionKind(meta = {}, task, now = Date.now(), hours = 48) {
   const confirmed = meta.completedAt || (meta.statusChangedAt && !meta.manualPending
     && !meta.initialHistory && !meta.initialRemoteHistory);
   const activityAt = task && Object.hasOwn(task, "activityAt") ? task.activityAt : task?.updatedAt;
   if (task?.runtimeStatus !== "running" && task?.runtimeStatus !== "failed"
-    && chatgptAttentionExpired(task, now) && (!confirmed || meta.manualPending
+    && (chatgptAttentionExpired(task, now) || projectAttentionExpired(task, meta, now, hours))
+    && !(task?.source !== "chatgpt" && meta.seenAt
+      && !meta.manualPending && time(activityAt) <= time(meta.seenActivityAt || meta.seenAt)) && (!confirmed || meta.manualPending
       || time(activityAt) > time(meta.seenActivityAt || meta.seenAt))) return "automatic";
   return confirmed ? "confirmed" : "history";
+}
+
+export function taskReadStatus(task, meta = {}) {
+  if (!meta.viewedAt) return "unread";
+  const activityAt = Object.hasOwn(task, "activityAt") ? task.activityAt : task.updatedAt;
+  return time(activityAt) > time(meta.viewedActivityAt || meta.viewedAt) ? "unread" : "read";
 }
 
 export function taskAttentionLabel(task, meta = {}) {
@@ -57,12 +75,14 @@ export const LIVE_VIEW_KEY = "taskboard.codex-live-position.v1";
 export function normalizeLiveView(value = {}) {
   if (!value || typeof value !== "object") value = {};
   const groups = [...LIVE_TASK_STATUSES, "history"];
-  const keys = [...groups, ...["project", "chatgpt"].flatMap(source => groups.map(group => `${source}:${group}`))];
+  const deviceKeys = Object.keys(value.visibleCounts || {}).filter(key => key.startsWith("project:attention:") && key.length <= 1024).slice(0, 100);
+  const keys = [...deviceKeys, ...groups, ...["project", "chatgpt"].flatMap(source => groups.map(group => `${source}:${group}`))];
   const visibleCounts = Object.fromEntries(keys.flatMap(key => {
     const count = value.visibleCounts?.[key];
     return Number.isFinite(count) && count >= 5 ? [[key, Math.min(5000, Math.floor(count))]] : [];
   }));
   return {
+    projectAutoCompleteHours: [0, 24, 48, 72, 168].includes(value.projectAutoCompleteHours) ? value.projectAutoCompleteHours : 48,
     query: typeof value.query === "string" ? value.query.slice(0, 500) : "",
     projectId: typeof value.projectId === "string" ? value.projectId.slice(0, 512) : "",
     visibleCounts,
@@ -118,5 +138,5 @@ export function bootstrapRemoteHistory(tasks, meta, cutoff) {
 
 // The native project page consumes the exact same functions as the React board.
 export function liveStateRuntimeSource() {
-  return `(() => { ${time.toString()}; ${chatgptAttentionExpired.toString()}; return { liveTaskStatus: ${liveTaskStatus.toString()}, completionKind: ${completionKind.toString()}, taskAttentionLabel: ${taskAttentionLabel.toString()}, bootstrapRemoteHistory: ${bootstrapRemoteHistory.toString()} }; })()`;
+  return `(() => { ${time.toString()}; ${chatgptAttentionExpired.toString()}; ${projectAttentionExpired.toString()}; return { liveTaskStatus: ${liveTaskStatus.toString()}, completionKind: ${completionKind.toString()}, taskAttentionLabel: ${taskAttentionLabel.toString()}, bootstrapRemoteHistory: ${bootstrapRemoteHistory.toString()} }; })()`;
 }

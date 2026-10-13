@@ -25,7 +25,8 @@
   const PROJECT_OVERVIEW_PAGE_ID = "nuyoah-workstation-project-page";
   const WORKSTATION_HEADER_CLASS = "nuyoah-workstation-header";
   const WORKSTATION_ENTRY_ID = "nuyoah-workstation-entry";
-  const sidebarMode = window.__NUYOAH_WORKSTATION_CONFIG__?.sidebarMode === "enhanced" ? "enhanced" : "native";
+  const sidebarMode = ["enhanced", "capsules"].includes(window.__NUYOAH_WORKSTATION_CONFIG__?.sidebarMode)
+    ? window.__NUYOAH_WORKSTATION_CONFIG__.sidebarMode : "native";
   const WORKSTATION_LAST_PANEL_KEY = "nuyoah-workstation:last-panel-v1";
   const WORKSTATION_FONT_SIZE_KEY = "nuyoah-workstation:font-size-v1";
   const WORKSTATION_FONT_SIZE_MIN = 11;
@@ -87,7 +88,7 @@
   const ROW_SELECTOR = "[data-app-action-sidebar-thread-row]";
   const RUNTIME_TOKEN = globalThis.crypto?.randomUUID?.() || `${Date.now()}-${Math.random()}`;
   try { window[SENTINEL]?.destroy?.(); } catch {}
-  if (sidebarMode === "native") clearLegacySidebarResidue();
+  if (sidebarMode !== "enhanced") clearLegacySidebarResidue();
 
   let destroyed = false;
   let observer = null;
@@ -118,7 +119,7 @@
   let skillOrganizerSource = null;
   let skillOrganizerCatalog = [];
   let skillOrganizerCatalogSignature = "";
-  let skillOrganizerFilter = "常用";
+  let skillOrganizerFilter = "全部";
   let skillOrganizerQuery = "";
   let skillOrganizerNativeVisible = false;
   let skillOrganizerFavorites = null;
@@ -1975,9 +1976,18 @@
         background: color-mix(in srgb, #2f80ed 11%, transparent);
         color: #1767c0;
       }
+      #${SKILL_ORGANIZER_ID} .codex-skill-category {
+        display: inline-block; margin-top: 6px; padding: 2px 7px; border-radius: 6px;
+        background: color-mix(in srgb, currentColor 7%, transparent);
+        color: var(--color-token-text-secondary, inherit); font-size: 12px; overflow-wrap: anywhere;
+      }
+      #${SKILL_ORGANIZER_ID} .codex-skill-filter:focus-visible {
+        outline: 2px solid var(--color-token-accent-foreground, #2f80ed); outline-offset: 2px;
+      }
       #${SKILL_ORGANIZER_ID} .codex-skill-grid {
         display: grid;
         grid-template-columns: repeat(2, minmax(0, 1fr));
+        grid-auto-rows: max-content;
         gap: 9px;
         align-content: start;
         overflow: auto;
@@ -2419,7 +2429,7 @@
   }
 
   function updateViewState() {
-    if (sidebarMode === "native") return;
+    if (sidebarMode !== "enhanced") return;
     document.documentElement.setAttribute("data-codex-conversation-view", viewMode);
     const button = document.getElementById(TOGGLE_ID);
     if (!button) return;
@@ -3288,6 +3298,20 @@
       return { threadId, hostId: target.hostId, threadTitle: target.title || entry?.title || '',
         projectId: entry?.projectId || '', projectName: entry?.projectName || '' };
     }
+    // Hidden native rows can retain a client-draft or previous-thread marker.
+    // Prefer the visible native controller's explicit host/thread route.
+    let nativeTarget = null;
+    try { nativeTarget = window.__nuyoahMultiChatNative__?.current?.(); } catch {}
+    if (nativeTarget?.clientThreadId && !nativeTarget.threadId)
+      return { threadId: '', hostId: '', threadTitle: '', projectId: '', projectName: '' };
+    const nativeId = normalizedThreadId(nativeTarget?.threadId || '');
+    if (nativeTarget?.hostId && /^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/.test(nativeId)) {
+      const entry = nativeTarget.hostId === 'local' ? searchCatalogByThread.get(nativeId) || recentCatalogByThread.get(nativeId)
+        || taskCatalog.find(item => normalizedThreadId(item.threadId) === nativeId)
+        : window.__nuyoahRemoteTaskCatalog__?.snapshot?.().find(item => item.hostId === nativeTarget.hostId && item.threadId === nativeId);
+      return { threadId: nativeId, hostId: nativeTarget.hostId, threadTitle: entry?.title || '',
+        projectId: entry?.projectId || '', projectName: entry?.projectName || '' };
+    }
     const active = document.querySelector('[data-app-action-sidebar-thread-active="true"], [data-app-action-sidebar-thread-selected="true"], [data-app-action-sidebar-thread-row][aria-current="page"]');
     let threadId = normalizedThreadId(active?.getAttribute("data-app-action-sidebar-thread-id") || "");
     const hasSidebarIdentity = Boolean(threadId);
@@ -3579,12 +3603,13 @@
     } catch {}
   }
 
-  const DEFAULT_SKILL_FILTERS = ["当前任务", "常用", "视频创作", "导演镜头", "画面风格", "资产工作台", "写作研究", "工具管理", "全部"];
+  const DEFAULT_SKILL_FILTERS = ["全部", "当前任务", "常用"];
+  const skillClassification = window.__nuyoahSkillClassification__;
   const SKILL_CONTEXT_STOP_WORDS = new Set(["当前", "任务", "项目", "实现", "开发", "修改", "修复", "检查", "现有", "代码", "直接", "一个", "这个", "提供", "显示", "根据"]);
-
   const customSkillCategories = window.__NUYOAH_WORKSTATION_CONFIG__?.skills?.categories;
-  const SKILL_FILTERS = Array.isArray(customSkillCategories)
-    ? ["当前任务", "常用", ...customSkillCategories.map(item => item.label), "全部"] : DEFAULT_SKILL_FILTERS;
+  const SKILL_FILTERS = [...new Set([...DEFAULT_SKILL_FILTERS, ...(skillClassification?.labels || []),
+    "未分类", ...(Array.isArray(customSkillCategories) ? customSkillCategories.map(item => item.label) : [])])];
+  const skillPrimaryCategory = entry => skillClassification?.categoryFor(entry) || "未分类";
 
   function skillContextTerms() {
     const context = currentCodexTaskContext();
@@ -3653,16 +3678,9 @@
     if (category === "全部") return true;
     if (category === "当前任务") return skillMatchesCurrentTask(entry);
     if (category === "常用") return skillOrganizerFavorites?.has(entry.name) === true;
-    if (Array.isArray(customSkillCategories)) {
-      const configured = customSkillCategories.find(item => item.label === category);
-      return configured?.keywords.some(keyword => text.normalize('NFC').toLocaleLowerCase().includes(keyword.normalize('NFC').toLocaleLowerCase())) || false;
-    }
-    if (category === "视频创作") return /视频|影像|seedance|即梦|minimax|剪辑|节奏|音乐|音效|mv|生成/i.test(text);
-    if (category === "导演镜头") return /导演|镜头|分镜|动作|摄影|表演|角色|转场|vfx|特效/i.test(text);
-    if (category === "画面风格") return /风格|美学|视觉|画面|图像|灯光|材质|构图|色彩|写实/i.test(text);
-    if (category === "资产工作台") return /资产|素材|工作台|归档|账本|管线|codex|知识卡|下载|清理/i.test(text);
-    if (category === "写作研究") return /写作|研究|知识|文章|公众号|小红书|脚本|语义|阅读|剧本/i.test(text);
-    return /工具|管理|浏览器|网页|数据|表格|文档|安装|审计|测试|调试|skill|codex|plugin/i.test(text);
+    if (category === "未分类" || skillClassification?.labels.includes(category)) return skillPrimaryCategory(entry) === category;
+    const configured = customSkillCategories?.find(item => item.label === category);
+    return configured?.keywords.some(keyword => text.normalize('NFC').toLocaleLowerCase().includes(keyword.normalize('NFC').toLocaleLowerCase())) || false;
   }
 
   function clearSkillOrganizer() {
@@ -3674,7 +3692,7 @@
     skillOrganizerSource = null;
     skillOrganizerCatalog = [];
     skillOrganizerCatalogSignature = "";
-    skillOrganizerFilter = "常用";
+    skillOrganizerFilter = "全部";
     skillOrganizerQuery = "";
     skillOrganizerNativeVisible = false;
     closeSkillContextMenu();
@@ -3731,6 +3749,12 @@
       }));
     }
     syncSkillOrganizerFilterSelection(shell);
+    filters.querySelectorAll("[data-codex-skill-filter]").forEach(button => {
+      const label = button.dataset.codexSkillFilter;
+      const count = skillOrganizerCatalog.filter(entry => skillMatchesCategory(entry, label)).length;
+      button.textContent = `${label} ${count}`;
+      button.setAttribute("aria-label", `${label}，${count} 个 Skill`);
+    });
     renderSkillLabelNotice(shell);
     const context = currentCodexTaskContext();
     const contextCopy = shell.querySelector(".codex-skill-context");
@@ -3739,9 +3763,10 @@
       : "当前没有选中的任务，可查看全部 Skills";
     const terms = skillOrganizerQuery.toLocaleLowerCase("zh-CN").split(/\s+/).filter(Boolean);
     const visible = skillOrganizerCatalog.filter((entry) => {
-      const text = `${entry.title} ${entry.description} ${entry.name}`.toLocaleLowerCase("zh-CN");
+      const text = `${entry.title} ${entry.description} ${entry.sourceDescription || ""} ${entry.name} ${skillPrimaryCategory(entry)}`.toLocaleLowerCase("zh-CN");
       return terms.every((term) => text.includes(term)) && skillMatchesCategory(entry, skillOrganizerFilter);
     });
+    shell.querySelector(".codex-skill-result-head strong").textContent = skillOrganizerFilter === "全部" ? "全部 Skills" : skillOrganizerFilter;
     shell.querySelector(".codex-skill-result-count").textContent = `${visible.length} / ${skillOrganizerCatalog.length}`;
     const grid = shell.querySelector(".codex-skill-grid");
     if (!visible.length) {
@@ -3761,10 +3786,11 @@
       row.setAttribute("role", "button");
       row.tabIndex = 0;
       const copy = document.createElement("span");
-      copy.innerHTML = '<span class="codex-skill-name"></span><span class="codex-skill-description"></span><span class="codex-skill-callable"></span>';
+      copy.innerHTML = '<span class="codex-skill-name"></span><span class="codex-skill-description"></span><span class="codex-skill-callable"></span><span class="codex-skill-category"></span>';
       copy.querySelector(".codex-skill-name").textContent = entry.title;
       copy.querySelector(".codex-skill-description").textContent = entry.description;
       copy.querySelector(".codex-skill-callable").textContent = entry.name;
+      copy.querySelector(".codex-skill-category").textContent = skillPrimaryCategory(entry);
       const favorite = document.createElement("button");
       favorite.type = "button";
       favorite.className = "codex-skill-favorite";
@@ -4062,8 +4088,10 @@
     if (shell.parentElement !== mount.surface) mount.surface.appendChild(shell);
     skillOrganizerCatalog = hostSkillCatalog.slice();
     skillOrganizerCatalogSignature = skillOrganizerCatalog.map((entry) => `${entry.name}\u0000${entry.description}`).join("\u0001");
-    skillOrganizerQuery = typeof options?.query === "string" ? options.query.trim() : "";
-    skillOrganizerFilter = skillOrganizerQuery ? "全部" : (currentCodexTaskContext().threadTitle ? "当前任务" : "全部");
+    if (typeof options?.query === "string") {
+      skillOrganizerQuery = options.query.trim();
+      skillOrganizerFilter = "全部";
+    }
     const input = shell.querySelector("input");
     input.value = skillOrganizerQuery;
     shell.hidden = false;
@@ -5322,7 +5350,7 @@
 
   function revealThread(rawThreadId, { refreshPinnedProjects = true } = {}) {
     // Native navigation owns project expansion, selection and list order.
-    if (sidebarMode === "native") return Boolean(normalizedThreadId(rawThreadId));
+    if (sidebarMode !== "enhanced") return Boolean(normalizedThreadId(rawThreadId));
     const threadId = normalizedThreadId(rawThreadId);
     if (!threadId) return false;
     const entry = searchCatalogByThread.get(threadId) || recentCatalogByThread.get(threadId);
@@ -6184,7 +6212,14 @@
 
   function sync() {
     if (destroyed || workstationDrag || snapshotDepth) return;
-    if (sidebarMode === "native") {
+    if (sidebarMode !== "enhanced") {
+      if (sidebarMode === "capsules" && window.__nuyoahCreateCapsuleSidebar__) {
+        window.__nuyoahCapsuleSidebar__ ||= window.__nuyoahCreateCapsuleSidebar__({
+          window, readSnapshot: getTaskboardSnapshot, readCurrent: currentCodexTaskContext,
+          openTask: entry => openProjectTask(entry, null, { returning: true }),
+        });
+        window.__nuyoahCapsuleSidebar__.sync();
+      }
       ensureNativeWorkstationEntry();
       const suspended = window.__nuyoahMultiChat__?.snapshot?.().suspended;
       if (!suspended && currentCodexTaskContext().threadId) {
@@ -6588,6 +6623,8 @@
   }
 
   function destroy() {
+    window.__nuyoahCapsuleSidebar__?.destroy?.();
+    delete window.__nuyoahCapsuleSidebar__;
     window.__nuyoahMultiChat__?.destroy?.();
     window.__nuyoahSkillTimeline__?.destroy?.();
     window.__nuyoahWorkItemsUI__?.destroy?.();
