@@ -14,6 +14,11 @@ Nuyoah-specific changes must be documented below and should prefer the
 
 ## Local changes
 
+- Conversation archive 0.33.4: Nuyoah's capsule and Taskboard actions call the
+  existing native conversation archiver for local tasks and confirm the archived
+  catalog state. The vendor Taskboard hides archive on remote metadata cards;
+  the pinned upstream manifest and native conversation store are unchanged.
+
 - Thread metadata 0.31.0: opt-in local title/description upkeep uses native
   completion events and the existing app-server connection, fixed lightweight
   ephemeral generation with no model fallback, bounded text and native writes.

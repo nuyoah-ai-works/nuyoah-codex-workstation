@@ -112,6 +112,9 @@ test("Taskboard snapshot uses the full unarchived catalog, native runtime state,
   assert.match(source, /function createProjectTask\(projectId\)/);
   assert.match(source, /nativeFolderCreateButton\(item\)/);
   assert.match(source, /async function archiveProjectTask\(threadId, hostId = "local"\)/);
+  assert.match(source, /archiveTask: entry => archiveProjectTask\(entry\.threadId, entry\.hostId\)/);
+  assert.match(source, /waitForProjectTaskArchive\(normalized, hostId\)/);
+  assert.match(source, /archivedThreadIds = new Set\(\(Array\.isArray\(snapshot\.archivedThreadIds\)/);
   assert.match(source, /data-app-action-sidebar-thread-host-id/);
   assert.match(source, /getTaskboardSnapshot,/);
   assert.match(source, /createProjectTask,/);

@@ -213,6 +213,16 @@ export function createNativeTaskMapAdapter({ window: hostWindow, loadModule } = 
       return { target, turnId, status: 'sent' };
     } catch (error) { throw mutationFailure(error); }
   }
+  async function archive(value) {
+    const target = targetOf(value);
+    const { client } = await runtime();
+    if (typeof client.archiveConversation !== 'function') throw fail('incompatible');
+    try {
+      await call(client, 'archiveConversation', target.threadId,
+        { useAppServerPins: true, source: 'recent_tasks_menu' });
+      return true;
+    } catch (error) { throw mutationFailure(error); }
+  }
   async function create(value, { text, title } = {}) {
     const target = targetOf(value), prompt = messageOf(text), childTitle = clean(title) || '新任务';
     const native = await runtime(), { client } = native;
@@ -506,5 +516,5 @@ export function createNativeTaskMapAdapter({ window: hostWindow, loadModule } = 
       },
     };
   }
-  return { attentionSession, inspect, readTaskMetadata, send, create, listThreads, listChatGptThreads, metadataSession };
+  return { attentionSession, inspect, readTaskMetadata, send, archive, create, listThreads, listChatGptThreads, metadataSession };
 }

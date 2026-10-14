@@ -1,5 +1,5 @@
 // Serialized into the host renderer: all helpers stay inside this factory.
-export function createCapsuleSidebar({ window: host, readSnapshot, readCurrent, openTask }) {
+export function createCapsuleSidebar({ window: host, readSnapshot, readCurrent, openTask, archiveTask }) {
   const doc = host.document;
   const ROOT = 'nuyoah-capsule-sidebar';
   const STYLE = `${ROOT}-style`;
@@ -236,6 +236,7 @@ export function createCapsuleSidebar({ window: host, readSnapshot, readCurrent, 
       #${ROOT} .nc-feedback:empty{display:none}
       #${ROOT} .nc-detail{position:sticky;bottom:8px;z-index:4;margin-top:10px;border:1px solid var(--capsule-border);border-radius:12px;background:var(--color-token-main-surface-primary,Canvas);padding:12px;box-shadow:0 5px 18px color-mix(in srgb,CanvasText 10%,transparent);font-size:13px;overflow-wrap:anywhere}
       #${ROOT} .nc-detail p{margin:8px 0 0;white-space:pre-wrap}#${ROOT} .nc-detail-close{float:right;padding:0 5px}
+      #${ROOT} .nc-detail-archive{display:block;margin-top:12px;padding:6px 9px;border:1px solid var(--capsule-border);font-size:12px}#${ROOT} .nc-detail-archive:hover{background:var(--capsule-hover)}
       #${ROOT} [data-dragging="true"]{opacity:.4}
       #${ROOT} [data-drop-position="before"]{box-shadow:inset 3px 0 0 var(--capsule-sub)}
       #${ROOT} [data-drop-position="after"]{box-shadow:inset -3px 0 0 var(--capsule-sub)}
@@ -426,7 +427,20 @@ export function createCapsuleSidebar({ window: host, readSnapshot, readCurrent, 
       detail.dataset.owner = card.id;
       const close = button('×', 'nc-detail-close'); close.setAttribute('aria-label', '关闭摘要');
       close.onclick = () => { detail.hidden = true; card.details.focus({ preventScroll: true }); };
+      const archive = card.task.hostId === 'local' ? button('归档对话', 'nc-detail-archive') : null;
+      if (archive) archive.onclick = async () => {
+        if (archive.disabled) return;
+        archive.disabled = true;
+        text(feedback, '正在归档对话…');
+        try {
+          if (await archiveTask?.(card.task) !== true) throw new Error('Archive was not confirmed');
+          if (!disposed) { detail.hidden = true; text(feedback, '对话已归档'); }
+        } catch {
+          if (!disposed) { archive.disabled = false; text(feedback, '归档未确认，请刷新后重试'); }
+        }
+      };
       detail.replaceChildren(close, element('strong', '', card.task.title || '未命名对话'), element('p', '', summary(card.task)));
+      if (archive) detail.append(archive);
       detail.hidden = false; close.focus({ preventScroll: true });
     };
     cards.set(id, card); return card;

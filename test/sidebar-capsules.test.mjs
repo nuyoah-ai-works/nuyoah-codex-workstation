@@ -41,7 +41,7 @@ test('capsule sidebar keeps real groups, native identity, scrolling and fallback
           title: index === 0 ? '<img src=x onerror=alert(1)>' : `长标题对话 ${index + 1} 用于检查双列和溢出`,
           progress: `摘要 ${index + 1} 保留一行完整信息，不是任务完成凭据`,
           updatedAt: time(index < 5 ? 0 : index < 8 ? 1 : 2), runtimeStatus: index === 2 ? 'running' : 'completed', pinned: index === 3,
-        })) }, opens: [],
+        })) }, opens: [], archives: [], archiveAllowed: false,
       };
       window.fixture.snapshot.tasks.push(
         { hostId: 'local', threadId: id(81), projectId: 'beta', projectName: '项目乙', title: '其他项目', progress: '乙摘要', updatedAt: time(0) },
@@ -59,6 +59,7 @@ test('capsule sidebar keeps real groups, native identity, scrolling and fallback
     await page.evaluate(`window.sidebar = (${createCapsuleSidebar.toString()})({ window,
       readSnapshot: () => window.fixture.snapshot, readCurrent: () => window.fixture.current,
       openTask: task => { window.fixture.opens.push({hostId:task.hostId,threadId:task.threadId}); return true; },
+      archiveTask: task => { window.fixture.archives.push({hostId:task.hostId,threadId:task.threadId}); return window.fixture.archiveAllowed; },
     }); window.sidebar.sync();`);
     const root = page.locator('#nuyoah-capsule-sidebar');
 
@@ -109,6 +110,9 @@ test('capsule sidebar keeps real groups, native identity, scrolling and fallback
     await t.test('remote identity remains scoped, search and details are keyboard usable', async () => {
       await root.locator('.nc-tab', { hasText: '远程甲' }).click();
       assert.equal(await root.locator('.nc-card').count(), 1);
+      await root.locator('.nc-detail-button').click();
+      assert.equal(await root.locator('.nc-detail-archive').count(), 0);
+      await page.keyboard.press('Escape');
       await root.locator('.nc-open').click();
       assert.deepEqual(await page.evaluate(() => window.fixture.opens.at(-1)), { hostId: 'remote-fixture', threadId: '00000000-0000-4000-8000-000000000001' });
       assert.equal(await page.evaluate(() => window.sidebar.previewRequests().length), 0);
@@ -116,12 +120,31 @@ test('capsule sidebar keeps real groups, native identity, scrolling and fallback
       await root.locator('input[aria-label="搜索当前项目的对话"]').fill('长标题对话 17 ');
       assert.equal(await root.locator('.nc-card').count(), 1);
       await root.locator('.nc-detail-button').click(); assert.equal(await root.locator('.nc-detail').isVisible(), true);
+      assert.equal(await root.locator('.nc-detail-archive').count(), 1);
       await page.keyboard.press('Escape'); assert.equal(await root.locator('.nc-detail').isHidden(), true);
       await root.locator('input[aria-label="搜索当前项目的对话"]').fill('');
       await root.locator('.nc-more').click(); await root.locator('input[aria-label="查找项目"]').fill('远程');
       assert.equal(await root.locator('.nc-project-option').count(), 1);
       await page.keyboard.press('Escape'); assert.equal(await root.locator('.nc-picker').isHidden(), true);
       await root.locator('.nc-new').click(); assert.equal(await page.evaluate(() => window.created), 1);
+    });
+
+    await t.test('hidden native sidebar still has an archive action with confirmed and failed states', async () => {
+      await root.locator('input[aria-label="搜索当前项目的对话"]').fill('长标题对话 17 ');
+      await root.locator('.nc-detail-button').click();
+      assert.equal(await page.locator('#native-root').isVisible(), false);
+      await root.locator('.nc-detail-archive').click();
+      assert.equal(await root.locator('.nc-feedback').textContent(), '归档未确认，请刷新后重试');
+      assert.equal(await root.locator('.nc-detail-archive').isEnabled(), true);
+      await page.evaluate(() => window.fixture.archiveAllowed = true);
+      await root.locator('.nc-detail-archive').click();
+      assert.equal(await root.locator('.nc-detail').isHidden(), true);
+      assert.equal(await root.locator('.nc-feedback').textContent(), '对话已归档');
+      assert.deepEqual(await page.evaluate(() => window.fixture.archives), [
+        { hostId: 'local', threadId: '00000000-0000-4000-8000-000000000017' },
+        { hostId: 'local', threadId: '00000000-0000-4000-8000-000000000017' },
+      ]);
+      await root.locator('input[aria-label="搜索当前项目的对话"]').fill('');
     });
 
     await t.test('project and task drags persist order without navigation or date changes', async () => {

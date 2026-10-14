@@ -438,7 +438,7 @@ async function pushPreviews(owner = client, revision = rendererRevision) {
   const previews = rawPreviews.map((preview) => presentCardPreview(preview));
   const usage = presentRateLimit(rawUsage, { timeZone: "Asia/Shanghai" });
   if (!isCurrentRenderer(owner, revision)) return;
-  const snapshot = { previews, usage, searchCatalog, recentCatalog,
+  const snapshot = { previews, usage, searchCatalog, recentCatalog, archivedThreadIds: archivedIds,
     taskCatalog: taskCatalog.map(task => ({ ...task, activityAt: repository.taskActivityAt(task.threadId) })),
     interruptedCatalog, pinnedThreadIds, activeThreadIds };
   await owner.evaluate(`window.__codexConversationPreviewInjection__?.applySnapshot?.(${JSON.stringify(snapshot)})`);

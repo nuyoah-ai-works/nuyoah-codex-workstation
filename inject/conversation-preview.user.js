@@ -162,6 +162,7 @@
   let searchCatalogByThread = new Map();
   let recentCatalog = [];
   let recentCatalogByThread = new Map();
+  let archivedThreadIds = new Set();
   let taskCatalog = [];
   let interruptedCatalog = [];
   let interruptedCatalogByThread = new Map();
@@ -6217,6 +6218,7 @@
         window.__nuyoahCapsuleSidebar__ ||= window.__nuyoahCreateCapsuleSidebar__({
           window, readSnapshot: getTaskboardSnapshot, readCurrent: currentCodexTaskContext,
           openTask: entry => openProjectTask(entry, null, { returning: true }),
+          archiveTask: entry => archiveProjectTask(entry.threadId, entry.hostId),
         });
         window.__nuyoahCapsuleSidebar__.sync();
       }
@@ -6288,6 +6290,8 @@
       setUsage(snapshot.usage);
       setSearchCatalog(snapshot.searchCatalog);
       setRecentCatalog(snapshot.recentCatalog);
+      archivedThreadIds = new Set((Array.isArray(snapshot.archivedThreadIds) ? snapshot.archivedThreadIds : [])
+        .map(normalizedThreadId).filter(Boolean));
       setTaskCatalog(snapshot.taskCatalog);
       setInterruptedCatalog(snapshot.interruptedCatalog);
       setPinnedThreads(snapshot.pinnedThreadIds);
@@ -6444,25 +6448,29 @@
 
   async function archiveProjectTask(threadId, hostId = "local") {
     const normalized = normalizedThreadId(threadId);
-    const rows = Array.from(document.querySelectorAll("[data-app-action-sidebar-thread-id]"))
-      .filter((row) => normalizedThreadId(row.getAttribute("data-app-action-sidebar-thread-id")) === normalized
-        && (row.getAttribute("data-app-action-sidebar-thread-host-id") || "local") === hostId);
-    const archiveButton = rows.flatMap((row) => Array.from(row.querySelectorAll("button")))
-      .find((button) => /归档|archive/i.test(`${button.getAttribute("aria-label") || ""} ${button.title || ""}`));
-    if (archiveButton) {
-      archiveButton.click();
-      return true;
+    if (!normalized || hostId !== "local") return false;
+    if (archivedThreadIds.has(normalized)) return false;
+    const archive = window.__nuyoahNativeTaskAdapter__?.archive;
+    if (typeof archive !== "function") return false;
+    try {
+      await archive({ hostId, threadId: normalized });
+    } catch (error) {
+      if (error?.definite === true) return false;
+      // A sent request may have succeeded even when its response was lost.
     }
-    const menuButton = rows.flatMap((row) => Array.from(row.querySelectorAll("button")))
-      .find((button) => /更多|more|menu/i.test(`${button.getAttribute("aria-label") || ""} ${button.title || ""}`));
-    if (!menuButton) return false;
-    menuButton.click();
-    await new Promise((resolve) => window.setTimeout(resolve, 80));
-    const menuItem = Array.from(document.querySelectorAll('[role="menuitem"], [role="option"]'))
-      .find((item) => /归档|archive/i.test(item.textContent || ""));
-    if (!menuItem) return false;
-    menuItem.click();
-    return true;
+    return await waitForProjectTaskArchive(normalized, hostId);
+  }
+
+  async function waitForProjectTaskArchive(threadId, hostId) {
+    const confirmed = () => hostId === "local" && archivedThreadIds.has(threadId);
+    if (confirmed()) return true;
+    return await new Promise((resolve) => {
+      const started = Date.now();
+      const timer = window.setInterval(() => {
+        if (confirmed()) { window.clearInterval(timer); resolve(true); }
+        else if (Date.now() - started >= 16_000) { window.clearInterval(timer); resolve(false); }
+      }, 250);
+    });
   }
 
   function setUsage(value) {

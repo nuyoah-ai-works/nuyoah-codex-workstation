@@ -4,7 +4,7 @@
 
 它保留中间的原生对话，把项目上下文、Taskboard、当前可调用 Skills 和本地资产统一放进右侧工作站；左侧通过顶部项目切换和双列胶囊卡片快速打开原生对话。用户只需要一个“工作站”入口，不需要在多个独立工具间来回切换。
 
-当前版本：**0.33.3**。公开源码：[nuyoah-ai-works/nuyoah-codex-workstation](https://github.com/nuyoah-ai-works/nuyoah-codex-workstation)。更新记录见 [CHANGELOG.md](./CHANGELOG.md)。
+当前版本：**0.33.4**。公开源码：[nuyoah-ai-works/nuyoah-codex-workstation](https://github.com/nuyoah-ai-works/nuyoah-codex-workstation)。更新记录见 [CHANGELOG.md](./CHANGELOG.md)。
 
 自 2026-09-02 起，本仓库是唯一现役产品线。旧 Swift Sidecar 已只读归档到
 `<archive-root>/Nuyoah Codex Workspace Swift/2026-09-02/`，不再用于开发、安装或运行。
@@ -19,6 +19,7 @@
 - 任务地图可就地选卡，补充要求、拆出子任务、将成果交给主任务继续；明确发送才影响真实对话，布局操作保持独立。
 - 项目名称完整换行显示，项目与组内任务胶囊支持拖动或 Alt+方向键排序，并记住自定义顺序。
 - 左侧以顶部横栏切换项目、双列胶囊卡片展示对话；“工作站”入口位于对话顶部栏，保留 `/工作站` 命令入口。
+- 本机对话卡片详情可归档原对话，等待原生状态确认后提示结果；归档失败时保留重试入口。
 - 右侧统一使用 `项目 / 任务 / 技能 / 资产` 四个顶层 Tab。
 - 切换模块时不离开当前对话，不丢失输入框和滚动位置。
 - “项目”读取当前任务与项目关系，展示项目内任务、执行中数量和可用 Skill 数量。

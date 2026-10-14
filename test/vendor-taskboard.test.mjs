@@ -74,6 +74,7 @@ test("embedded Taskboard is a four-state Codex task view while standalone keeps 
   assert.match(liveBoard, /if \(!bootstrapExistingHistory\.current\) return/);
   assert.match(liveBoard, /taskboard:open-thread/);
   assert.match(liveBoard, /requestAction\("archive"/);
+  assert.match(liveBoard, /task\.source !== "chatgpt" && \(task\.hostId \|\| "local"\) === "local" && <button/);
   assert.match(liveBoard, /requestAction\("new-thread"/);
   assert.match(liveBoard, /执行目录已失效/);
   assert.match(liveBoard, /当前项目目录/);

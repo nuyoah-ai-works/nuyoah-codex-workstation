@@ -459,7 +459,7 @@ export function CodexTaskboard() {
             {task.displayStatus === "completed" ? "移回待处理" : "确认完成"}
           </button>
         )}
-        {task.source !== "chatgpt" && <button
+        {task.source !== "chatgpt" && (task.hostId || "local") === "local" && <button
           type="button"
           disabled={!connected}
           onClick={() => requestAction("archive", { threadId: task.threadId, hostId: task.hostId || "local" })}

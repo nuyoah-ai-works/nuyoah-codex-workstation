@@ -21,6 +21,7 @@ function fixture(overrides = {}) {
     sendRequest: async (method, params) => method === 'thread/turns/list' ? { data: [{ id: 'fixture-turn', status: 'completed' }] }
       : { data: [{ turnId: 'fixture-turn', item: { type: 'agentMessage', phase: 'final_answer', text: '虚构最后成果' } }] },
     sendFollowUpMessage: async () => 'fixture-new-turn',
+    archiveConversation: async () => {},
     resumeConversation: async () => ({ status: 'ready' }),
     getThreadExecutionState: async () => ({ latestModel: 'fixture-model', latestReasoningEffort: 'high' }),
     ...overrides.methods,
@@ -138,6 +139,16 @@ test('send preserves native settings and delegates an active task to the high-le
   assert.equal(result.status, 'sent'); assert.equal(result.turnId, 'fixture-new-turn');
   assert.deepEqual(f.calls.at(-1), { method: 'sendFollowUpMessage', args: [threadId, { prompt: '虚构追加要求' }] });
   assert.ok(!f.calls.some(call => call.method === 'sendRequest'));
+});
+
+test('archive uses the native conversation coordinator for the exact local task without reading its body', async () => {
+  const f = fixture();
+  assert.equal(await f.adapter.archive(target), true);
+  assert.deepEqual(f.calls, [{ method: 'archiveConversation', args: [threadId,
+    { useAppServerPins: true, source: 'recent_tasks_menu' }] }]);
+  assert.deepEqual(f.disposed, ['archiveConversation']);
+  await assert.rejects(f.adapter.archive({ ...target, hostId: 'remote-control:fixture' }), e => e.code === 'invalid_target');
+  assert.equal(f.calls.length, 1);
 });
 
 test('remote targets and malformed local identities cannot reach the renderer client', async () => {
