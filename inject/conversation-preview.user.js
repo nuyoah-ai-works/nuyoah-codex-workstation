@@ -2671,7 +2671,11 @@
       const preferred = parseFloat(panel.style.getPropertyValue(panel.id === "codex-taskboard-page"
         ? "--codex-taskboard-panel-width" : "--codex-workspace-panel-width"));
       const nativePane = adaptiveNativePanel(host);
-      if (nativePane && panel.nextElementSibling !== nativePane) host.insertBefore(panel, nativePane);
+      if (nativePane && panel.nextElementSibling !== nativePane) {
+        const focused = panel.contains(document.activeElement) ? document.activeElement : null;
+        host.insertBefore(panel, nativePane);
+        focused?.focus({ preventScroll: true });
+      }
       const nativeState = nativePanelPreference(nativePane);
       const nativeFullWidth = host.querySelector(':scope > [data-app-shell-right-panel-full-width="true"]');
       const geometry = nativeFullWidth ? { mode: "collapsed", width: 0 }
@@ -2851,9 +2855,23 @@
       button.setAttribute("role", "tab");
       button.setAttribute("aria-selected", String(panel.id === activePanel));
       button.textContent = panel.label;
+      button.tabIndex = panel.id === activePanel ? 0 : -1;
       button.onclick = () => openWorkstationPanel(panel.id);
       tabs.appendChild(button);
     }
+    tabs.addEventListener('keydown', (event) => {
+      if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return;
+      const at = WORKSTATION_PANELS.findIndex(item => item.id === activePanel);
+      const next = event.key === 'Home' ? 0 : event.key === 'End' ? WORKSTATION_PANELS.length - 1 : (at + (event.key === 'ArrowRight' ? 1 : WORKSTATION_PANELS.length - 1)) % WORKSTATION_PANELS.length;
+      event.preventDefault(); event.stopPropagation();
+      const target = WORKSTATION_PANELS[next].id; openWorkstationPanel(target);
+      const focusTab = () => {
+        const node = document.querySelector(`[data-nuyoah-workstation-header="${target}"] [data-nuyoah-workstation-panel="${target}"]`);
+        if (!node?.getClientRects().length) return false;
+        node.focus({ preventScroll: true }); return true;
+      };
+      requestAnimationFrame(() => { if (!focusTab()) requestAnimationFrame(focusTab); });
+    });
     const close = document.createElement("button");
     close.type = "button";
     close.className = "nuyoah-workstation-close";
@@ -3186,7 +3204,7 @@
       const api = window.__codexTaskboardInjection__;
       if (typeof api?.search === "function" && options.query) void api.search(options.query);
       else api?.open?.();
-      window.setTimeout(ensureTaskboardWorkstationHeader, 0);
+      ensureTaskboardWorkstationHeader();
       return Boolean(api);
     }
     if (target === "skills") return openSkillsGrouping(options);
@@ -6677,6 +6695,8 @@
     window.removeEventListener("message", handleWorkspacePanelMessage);
     closeStatusMenu();
     document.getElementById(STYLE_ID)?.remove();
+    window.__nuyoahInteractionTheme__?.destroy?.();
+    window.__nuyoahInteractionTheme__ = null;
     window.__nuyoahAppShortcuts__?.destroy?.();
     window.__nuyoahAppShortcuts__ = null;
     window.__nuyoahMagpieQuota__?.destroy?.();

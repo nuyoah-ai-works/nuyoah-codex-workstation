@@ -24,6 +24,8 @@ test('current-task assets follow project changes, retain the filter and recover 
     page.setDefaultTimeout(5000); const errors = []; page.on('pageerror', e => errors.push(e.message));
     const base = 'http://127.0.0.1:' + app.server.address().port;
     await page.goto(`${base}/?threadId=${ids[0]}&projectId=fixture-project-a&threadTitle=Fixture-A`);
+    assert.equal(await page.locator('body').evaluate(n=>n.classList.contains('nw-frame')),true);
+    assert.notEqual(await page.locator('#taskButton').evaluate(n=>getComputedStyle(n).transitionDuration),'0s');
     await page.locator('#taskButton').click(); await page.locator('.card-title').filter({ hasText: 'fixture-0.md' }).waitFor();
     const context = async (index, projectId = '', hostId = 'local') => {
       await page.evaluate(data => window.postMessage({ source: 'codex-sidebar-enhancer', action: 'context', ...data }, '*'),

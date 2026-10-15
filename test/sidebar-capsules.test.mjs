@@ -1,5 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import { readFile } from 'node:fs/promises';
+import { createInteractionTheme } from '../nuyoah/workstation/interaction-motion.mjs';
 import { createServer } from 'node:http';
 import { createCapsuleSidebar } from '../nuyoah/workstation/sidebar-capsules.mjs';
 
@@ -61,11 +63,13 @@ test('capsule sidebar keeps real groups, native identity, scrolling and fallback
       openTask: task => { window.fixture.opens.push({hostId:task.hostId,threadId:task.threadId}); return true; },
       archiveTask: task => { window.fixture.archives.push({hostId:task.hostId,threadId:task.threadId}); return window.fixture.archiveAllowed; },
     }); window.sidebar.sync();`);
+    const css = await readFile(new URL('../nuyoah/workstation/interaction-theme.css', import.meta.url), 'utf8');
+    await page.evaluate(`window.__nuyoahInteractionTheme__ = (${createInteractionTheme.toString()})({ window, css: ${JSON.stringify(css)} });`);
     const root = page.locator('#nuyoah-capsule-sidebar');
 
     await t.test('all date groups are complete; two columns and one summary line', async () => {
       assert.equal(await root.locator('.nc-card').count(), 80);
-      assert.deepEqual(await root.locator('.nc-group-toggle').allTextContents(), ['今天5⌄', '昨天3⌄', '更早72⌄']);
+      assert.deepEqual(await root.locator('.nc-group-toggle').allTextContents(), ['今天5›', '昨天3›', '更早72›']);
       assert.equal(await root.locator('img').count(), 0);
       const geometry = await root.locator('.nc-grid').first().evaluate(node => ({ columns: getComputedStyle(node).gridTemplateColumns.split(' ').length,
         wrap: getComputedStyle(node.querySelector('.nc-summary')).whiteSpace }));
@@ -97,14 +101,14 @@ test('capsule sidebar keeps real groups, native identity, scrolling and fallback
     await t.test('project switch restores each scroll position without navigating', async () => {
       const saved = await page.locator('[data-app-action-sidebar-scroll]').evaluate(node => node.scrollTop);
       await root.locator('.nc-more').click();
-      assert.ok(Math.abs(await page.locator('[data-app-action-sidebar-scroll]').evaluate(node => node.scrollTop) - saved) < 2);
+      assert.ok(Math.abs(await page.locator('[data-app-action-sidebar-scroll]').evaluate(node => node.scrollTop) - saved) < 2, JSON.stringify({saved,actual:await page.locator('[data-app-action-sidebar-scroll]').evaluate(node => node.scrollTop)}));
       await root.locator('.nc-project-option', { hasText: '项目乙' }).click();
       await page.waitForTimeout(40);
       assert.equal(await root.locator('.nc-card').count(), 1);
       assert.equal(await page.evaluate(() => window.fixture.opens.length), 0);
       await root.locator('.nc-tab', { hasText: '项目甲' }).click();
       await page.waitForTimeout(40);
-      assert.ok(Math.abs(await page.locator('[data-app-action-sidebar-scroll]').evaluate(node => node.scrollTop) - saved) < 2);
+      assert.ok(Math.abs(await page.locator('[data-app-action-sidebar-scroll]').evaluate(node => node.scrollTop) - saved) < 2, JSON.stringify({saved,actual:await page.locator('[data-app-action-sidebar-scroll]').evaluate(node => node.scrollTop)}));
     });
 
     await t.test('remote identity remains scoped, search and details are keyboard usable', async () => {
@@ -230,6 +234,19 @@ test('capsule sidebar keeps real groups, native identity, scrolling and fallback
       assert.equal(await root.locator('.nc-tabs').evaluate(n => n.scrollLeft), scroll);
     });
 
+    await t.test('folding reverses cleanly and background sync does not replay motion', async () => {
+      await page.emulateMedia({ reducedMotion: 'no-preference' });
+      await root.locator('.nc-tab', { hasText: '非常长的项目名称' }).click();
+      const toggle = root.locator('.nc-group-toggle').first(), grid = root.locator('.nc-grid').first();
+      await toggle.click(); await page.waitForTimeout(220); assert.equal(await grid.isHidden(), true);
+      await toggle.click(); await page.waitForTimeout(300); assert.equal(await grid.isVisible(), true);
+      await toggle.evaluate(n => { n.click(); n.click(); }); await page.waitForTimeout(300);
+      assert.equal(await grid.isVisible(), true); assert.equal(await grid.evaluate(n => n.inert), false);
+      await page.evaluate(() => window.sidebar.sync());
+      assert.equal(await grid.evaluate(n => n.getAnimations().length), 0);
+      assert.equal(await root.locator('.nc-tabs').getAttribute('data-nw-indicator'), 'true');
+      assert.equal(await page.locator('#native-draft').inputValue(), '保留草稿');
+    });
     await t.test('native rerender remount and destroy restore exact native nodes', async () => {
       await page.evaluate(() => {
         window.originalScroll = document.querySelector('[data-app-action-sidebar-scroll]');
@@ -258,6 +275,8 @@ test('capsule sidebar keeps real groups, native identity, scrolling and fallback
       assert.equal(await page.locator('#nuyoah-capsule-sidebar-style').count(), 0);
       await page.evaluate(() => window.broken.destroy());
     });
+    await page.evaluate(() => window.__nuyoahInteractionTheme__.destroy());
+    assert.equal(await page.locator('#nuyoah-interaction-theme').count(), 0);
     assert.deepEqual(errors, []);
   } finally {
     await browser.close(); await new Promise(resolve => server.close(resolve));

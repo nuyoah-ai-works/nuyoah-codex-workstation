@@ -1,3 +1,6 @@
+import { createInteractionTheme } from './interaction-motion.mjs';
+const interactionTheme = createInteractionTheme({ window, frame: true });
+window.addEventListener('pagehide', event => { if (!event.persisted) interactionTheme.destroy(); });
 import { restoreView, buildFolderTree, buildEagleFolderTree, renderMarkdown, ThumbnailQueue } from './asset-ui.js';
 
 const $ = id => document.getElementById(id);

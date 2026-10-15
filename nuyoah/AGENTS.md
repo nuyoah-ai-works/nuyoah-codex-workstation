@@ -147,3 +147,5 @@ private paths, or perform real file deletion from this layer.
   shared by the UI and CLI. Thread links retain only explicit host/thread identities;
   resolve titles and live states from the existing catalog. Never infer item completion
   from thread state. Reported plan states and reversible manual overrides remain separate.
+
+- `workstation/interaction-theme.css` is the shared presentation source for owned sidebar, workstation and iframe surfaces. `interaction-motion.mjs` handles only selection indicators, entrance/fold motion and lifecycle cleanup. Never style native chat controls, animate drag coordinates, navigate, read tasks or persist preferences from this layer. Taskboard imports this adapter explicitly; asset server/bridge expose only its two fixed public presentation files.

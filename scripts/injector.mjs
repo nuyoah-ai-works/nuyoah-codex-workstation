@@ -25,6 +25,7 @@ import { createChatGptCatalog } from "../nuyoah/taskboard/chatgpt-catalog.mjs";
 import { createRemoteTaskCatalog } from "../nuyoah/taskboard/remote-catalog.mjs";
 import { createMagpieQuotaService, selectCodexQuota } from '../nuyoah/workstation/magpie-quota.mjs';
 import { createAppShortcuts, openGrokBot, readGrokBotIcon } from '../nuyoah/workstation/app-shortcuts.mjs';
+import { createInteractionTheme } from '../nuyoah/workstation/interaction-motion.mjs';
 import { createMagpieQuotaUI } from '../nuyoah/workstation/magpie-quota-ui.mjs';
 const magpieQuota = createMagpieQuotaService();
 import { createCapsuleSidebar } from "../nuyoah/workstation/sidebar-capsules.mjs";
@@ -255,7 +256,9 @@ async function attach() {
     void window.__nuyoahAutoThreadMetadata__.start();`;
   const magpieSource = `window.__nuyoahMagpieQuota__?.destroy?.(); window.__nuyoahMagpieQuota__ = (${createMagpieQuotaUI.toString()})({ window, selectCodex: ${selectCodexQuota.toString()} });`;
   const appShortcutsSource = `window.__nuyoahAppShortcuts__?.destroy?.(); window.__nuyoahAppShortcuts__ = (${createAppShortcuts.toString()})({ window, iconUrl: ${JSON.stringify(await readGrokBotIcon())} });`;
-  const rendererSource = `if (window.top === window) { window.__NUYOAH_WORKSTATION_CONFIG__ = ${JSON.stringify(workstationConfig)}; window.__nuyoahCreateCapsuleSidebar__ = ${createCapsuleSidebar.toString()}; window.__nuyoahSkillClassification__ = (${createSkillClassification.toString()})(); ${projectSource}\n${taskContextSource}\nwindow.__nuyoahTaskMapUI__?.retainActions?.();\n${userSource}\n${workCanvasSource}\nwindow.__nuyoahNativeTaskAdapter__ = (${createNativeTaskMapAdapter.toString()})({ window });\n${taskActionTransportSource}\n${taskMapSource}\n${workItemsSource}\nwindow.__nuyoahSkillTimeline__?.destroy?.(); window.__nuyoahSkillTimeline__ = (${createSkillTimeline.toString()})({ window, document });\n${remoteSource}\n${multiChatSource}\n${autoMetadataSource}\n${magpieSource}\n${appShortcutsSource}\n}`;
+  const interactionCSS = await readFile(path.join(root, 'nuyoah/workstation/interaction-theme.css'), 'utf8');
+  const interactionSource = `window.__nuyoahInteractionTheme__?.destroy?.(); window.__nuyoahInteractionTheme__ = (${createInteractionTheme.toString()})({window, css:${JSON.stringify(interactionCSS)}});`;
+  const rendererSource = `if (window.top === window) { window.__NUYOAH_WORKSTATION_CONFIG__ = ${JSON.stringify(workstationConfig)}; window.__nuyoahCreateCapsuleSidebar__ = ${createCapsuleSidebar.toString()}; window.__nuyoahSkillClassification__ = (${createSkillClassification.toString()})(); ${projectSource}\n${taskContextSource}\nwindow.__nuyoahTaskMapUI__?.retainActions?.();\n${userSource}\n${workCanvasSource}\nwindow.__nuyoahNativeTaskAdapter__ = (${createNativeTaskMapAdapter.toString()})({ window });\n${taskActionTransportSource}\n${taskMapSource}\n${workItemsSource}\nwindow.__nuyoahSkillTimeline__?.destroy?.(); window.__nuyoahSkillTimeline__ = (${createSkillTimeline.toString()})({ window, document });\n${remoteSource}\n${multiChatSource}\n${autoMetadataSource}\n${magpieSource}\n${appShortcutsSource}\n${interactionSource}\n}`;
   const registered = await client.send("Page.addScriptToEvaluateOnNewDocument", { source: rendererSource });
   registeredScriptIdentifier = registered.identifier;
   await client.evaluate(rendererSource);

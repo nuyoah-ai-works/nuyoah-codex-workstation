@@ -11,7 +11,7 @@ import { TaskContextStore, taskId } from '../workstation/task-context-store.mjs'
 import { AutomaticReferences } from '../workstation/automatic-references.mjs';
 
 const publicRoot = fileURLToPath(new URL('./public/', import.meta.url));
-const staticFiles = new Map([['/', ['index.html','text/html']], ['/index.html',['index.html','text/html']], ['/app.js',['app.js','text/javascript']], ['/asset-ui.js',['asset-ui.js','text/javascript']], ['/ui-v3.css',['ui-v3.css','text/css']]]);
+const staticFiles = new Map([['/', ['index.html','text/html']], ['/index.html',['index.html','text/html']], ['/app.js',['app.js','text/javascript']], ['/asset-ui.js',['asset-ui.js','text/javascript']], ['/ui-v3.css',['ui-v3.css','text/css']], ['/interaction-theme.css',['../../workstation/interaction-theme.css','text/css']], ['/interaction-motion.mjs',['../../workstation/interaction-motion.mjs','text/javascript']]]);
 const mime = { mp4:'video/mp4',mov:'video/mp4',webm:'video/webm',m4v:'video/mp4',mp3:'audio/mpeg',wav:'audio/wav',m4a:'audio/mp4',ogg:'audio/ogg',flac:'audio/flac',opus:'audio/ogg' };
 
 export async function startAssetServer({ stateRoot, token, port = 5177, taskStore = new TaskContextStore(), automatic = new AutomaticReferences() }) {

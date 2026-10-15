@@ -60,14 +60,28 @@ test('quota UI handles actual windows, keyboard, lifecycle, narrow layout and er
     assert.match(await trigger.innerText(), /本周/); assert.doesNotMatch(await trigger.innerText(), /5 小时/);
     assert.equal(await panel.isVisible(), false); await trigger.click(); assert.equal(await panel.isVisible(), true);
     assert.match(await panel.innerText(), /已用 46%/);
-    await page.keyboard.press('Escape'); assert.equal(await panel.isVisible(), false); assert.equal(await trigger.evaluate(n => n === document.activeElement), true);
-    await trigger.click(); await page.getByRole('button', {name:'账号管理 ↗',exact:true}).click();
+    await page.keyboard.press('Escape'); await panel.waitFor({ state: 'hidden' }); assert.equal(await panel.isVisible(), false); assert.equal(await trigger.evaluate(n => n === document.activeElement), true);
+    await trigger.click();
+    // Refresh keeps the clicked button, account nodes alive.
+    await page.evaluate(() => { window.cardBefore = document.querySelector('.mq-card'); window.refreshBefore = document.querySelector('.mq-actions button'); });
+    await page.getByRole('button', { name: '刷新额度', exact: true }).click();
+    assert.equal(await page.getByRole('button', { name: '刷新额度', exact: true }).getAttribute('aria-disabled'), 'true');
+    await page.evaluate(data => { const r = window.ui.takeRequest(); window.ui.receive({ id: r.id, data }); }, data);
+    assert.equal(await page.evaluate(() => window.cardBefore === document.querySelector('.mq-card') && window.refreshBefore === document.activeElement), true);
+    // A new open cancels an in-flight close; its old completion must not hide it.
+    await page.evaluate(() => { const t=document.querySelector('#nuyoah-magpie-quota'); t.click(); t.click(); });
+    await page.waitForTimeout(380); assert.equal(await panel.isVisible(), true);
+    assert.equal(await trigger.getAttribute('aria-expanded'), 'true');
+    await page.getByRole('button', {name:'账号管理 ↗',exact:true}).click();
     assert.equal(await page.evaluate(() => window.ui.takeRequest().action), 'open');
     await page.keyboard.press('Escape');
     await page.setViewportSize({ width: 320, height: 700 }); await page.evaluate(() => document.querySelector('aside').style.width='300px');
     await page.waitForTimeout(1100); const bounds = await trigger.boundingBox(); assert.ok(bounds.x + bounds.width <= 300);
     await trigger.click(); const box = await panel.boundingBox(); assert.ok(box.x >= 0 && box.x + box.width <= 320);
     await page.emulateMedia({ colorScheme: 'dark', reducedMotion: 'reduce' });
+    await page.keyboard.press('Escape'); assert.equal(await panel.isVisible(), false);
+    await trigger.click(); assert.equal(await panel.evaluate(n => n.getAnimations().length), 0);
+    assert.equal(await trigger.evaluate(n => getComputedStyle(n).transitionDuration), '0s');
     await page.evaluate(() => window.ui.destroy()); assert.equal(await trigger.count(),0); assert.equal(await panel.count(),0);
     assert.equal(await page.locator('#draft').inputValue(), 'preserved');
     await page.evaluate(`window.ui=(${createMagpieQuotaUI.toString()})({window,selectCodex:${selectCodexQuota.toString()}})`);

@@ -1,0 +1,156 @@
+/* Shared Workstation presentation. Only owned surfaces use these tokens/rules. */
+:root {
+  --nw-surface: var(--color-background-primary-soft, var(--color-token-bg-primary, light-dark(#ffffff, #252527)));
+  --nw-base: color-mix(in srgb, var(--nw-text) 3%, var(--nw-surface));
+  --nw-soft: color-mix(in srgb, var(--nw-text) 5%, var(--nw-surface));
+  --nw-hover: color-mix(in srgb, var(--nw-text) 9%, var(--nw-surface));
+  --nw-line: color-mix(in srgb, var(--nw-text) 12%, var(--nw-surface));
+  --nw-text: var(--color-text-primary, var(--color-token-foreground, light-dark(#242428, #ededf0)));
+  --nw-muted: color-mix(in srgb, var(--nw-text) 65%, var(--nw-surface));
+  --nw-accent: light-dark(#417355, #98c4a8);
+  --nw-selected: light-dark(#edf2ee, #303d35);
+  --nw-shadow: 0 16px 44px light-dark(#14161e24, #00000070), 0 2px 8px light-dark(#14161e0d, #00000030);
+  --nw-ease: cubic-bezier(.16, 1, .3, 1);
+  --nw-fast: 140ms;
+  --nw-enter: 240ms;
+}
+:is(#nuyoah-capsule-sidebar, #nuyoah-workstation-project-page, #codex-skill-organizer, #codex-taskboard-page, #codex-asset-console-page, .nw-frame, .codex-skill-context-menu) {
+  color: var(--nw-text);
+  --nuyoah-surface: var(--nw-surface);
+  --nuyoah-text: var(--nw-text);
+  --nuyoah-muted: var(--nw-muted);
+  --nuyoah-border: var(--nw-line);
+  --nuyoah-subtle: var(--nw-soft);
+  --nuyoah-canvas-bg: var(--nw-base);
+  --nuyoah-accent: var(--nw-accent);
+  --nuyoah-accent-soft: var(--nw-selected);
+}
+:is(#nuyoah-capsule-sidebar, #nuyoah-workstation-project-page, #codex-skill-organizer, #codex-taskboard-page, #codex-asset-console-page, .nw-frame, .codex-skill-context-menu, .nuyoah-chat-grid-toolbar, .nuyoah-chat-grid-slot-head) :is(button, summary, input, select, textarea) {
+  transition: background-color var(--nw-fast) ease, border-color var(--nw-fast) ease, color var(--nw-fast) ease, box-shadow var(--nw-fast) ease, scale var(--nw-fast) var(--nw-ease);
+}
+:is(#nuyoah-capsule-sidebar, #nuyoah-workstation-project-page, #codex-skill-organizer, #codex-taskboard-page, #codex-asset-console-page, .nw-frame, .codex-skill-context-menu, .nuyoah-chat-grid-toolbar, .nuyoah-chat-grid-slot-head) button:active:not(:disabled):not([aria-disabled="true"]):not([draggable="true"]):not(.nuyoah-work-canvas-node) { scale: .97; }
+:is(#nuyoah-capsule-sidebar, #nuyoah-workstation-project-page, #codex-skill-organizer, #codex-taskboard-page, #codex-asset-console-page, .nw-frame, .codex-skill-context-menu) :is(button, summary, input, select, textarea):focus-visible { outline: 2px solid var(--nw-accent); outline-offset: 2px; }
+/* Navigation stays still under the pointer; the selected surface does the moving. */
+:is(#nuyoah-capsule-sidebar .nc-tabs, .nuyoah-workstation-tabs, .nuyoah-project-subnav, .nw-frame .nav-item, .nw-frame .codex-live-view-tabs) button:active,
+.nw-frame .nav-item:active { scale: 1; }
+[data-nw-indicator] { position: relative; isolation: isolate; }
+[data-nw-indicator]::before {
+  content: ""; position: absolute; pointer-events: none; z-index: 0;
+  left: 0; top: var(--nw-tab-y, 3px); width: var(--nw-tab-width, 0px); height: var(--nw-tab-height, 28px);
+  transform: translateX(var(--nw-tab-x, 0px)); border-radius: 7px; background: var(--nw-surface);
+  box-shadow: 0 1px 3px light-dark(#14161e16, #0003), 0 0 0 .5px var(--nw-line);
+  transition: transform 280ms var(--nw-ease), width 280ms var(--nw-ease), height 280ms var(--nw-ease);
+}
+[data-nw-indicator] > button { position: relative; z-index: 1; }
+:root #nuyoah-capsule-sidebar .nc-tabs[data-nw-indicator] > .nc-tab[aria-pressed="true"],
+.nuyoah-workstation-header .nuyoah-workstation-tabs[data-nw-indicator] > button[aria-selected="true"],
+.nw-frame .codex-live-view-tabs[data-nw-indicator] > button[aria-selected="true"] { background: transparent; box-shadow: none; color: var(--nw-text); }
+/* Sidebar: retain the two-column task layout and all metadata. */
+:root #nuyoah-capsule-sidebar { --capsule-surface:var(--nw-surface); --capsule-text:var(--nw-text); --capsule-sub:var(--nw-muted); --capsule-border:var(--nw-line); --capsule-hover:var(--nw-soft); }
+:root #nuyoah-capsule-sidebar .nc-toolbar { background: var(--nw-base); padding: 10px 4px 8px; border-radius: 12px 12px 0 0; }
+:root #nuyoah-capsule-sidebar .nc-search { background:var(--nw-surface); border:1px solid var(--nw-line); border-radius:9px; padding:7px 9px; margin-bottom:10px; }
+:root #nuyoah-capsule-sidebar .nc-tabs { gap:4px; padding:3px 2px 5px; }
+:root #nuyoah-capsule-sidebar .nc-tab { border-radius:7px; padding:7px 10px; }
+:root #nuyoah-capsule-sidebar .nc-tab[aria-pressed="true"] { background:var(--nw-surface); color:var(--nw-text); font-weight:550; }
+:root #nuyoah-capsule-sidebar .nc-countbar { padding:4px 2px; }
+:root #nuyoah-capsule-sidebar .nc-group-toggle { padding:16px 5px 9px; }
+:root #nuyoah-capsule-sidebar .nc-group-arrow { display:inline-block; transition:rotate 240ms var(--nw-ease); rotate:90deg; }
+:root #nuyoah-capsule-sidebar .nc-group-toggle[aria-expanded="false"] .nc-group-arrow { rotate:0deg; }
+:root #nuyoah-capsule-sidebar .nc-grid { gap:8px; }
+:root #nuyoah-capsule-sidebar .nc-card { border:1px solid var(--nw-line); border-radius:11px; box-shadow:none; transition:background-color 140ms ease,border-color 140ms ease,box-shadow 140ms ease; }
+:root #nuyoah-capsule-sidebar .nc-card:hover { background:var(--nw-soft); border-color:color-mix(in srgb,var(--nw-text) 22%,var(--nw-surface)); box-shadow:0 2px 6px #00000008; }
+:root #nuyoah-capsule-sidebar .nc-card[data-selected="true"] { background:var(--nw-selected); border-color:color-mix(in srgb,var(--nw-accent) 55%,var(--nw-line)); box-shadow:inset 0 0 0 .5px color-mix(in srgb,var(--nw-accent) 35%,transparent); }
+:root #nuyoah-capsule-sidebar .nc-open { border-radius:10px; padding:12px 11px 6px; }
+:root #nuyoah-capsule-sidebar .nc-open:active { scale:.99; }
+:root #nuyoah-capsule-sidebar .nc-title { font-weight:500; }
+:root #nuyoah-capsule-sidebar .nc-summary { color:var(--nw-muted); }
+:root #nuyoah-capsule-sidebar :is(.nc-picker,.nc-detail) { background:var(--nw-surface); border-color:var(--nw-line); border-radius:13px; box-shadow:var(--nw-shadow); }
+/* Workstation shell and module navigation. No native conversation styles. */
+:is(#nuyoah-workstation-project-page,#codex-skill-organizer,#codex-taskboard-page,#codex-asset-console-page) { background:var(--nw-surface); box-shadow:none; border-color:var(--nw-line); }
+.nuyoah-workstation-header { background:var(--nw-base); border-bottom:1px solid var(--nw-line); gap:10px; }
+.nuyoah-workstation-header .nuyoah-workstation-tabs { background:var(--nw-soft); border-radius:9px; padding:3px; gap:2px; }
+.nuyoah-workstation-header [data-nuyoah-workstation-panel] { border-radius:7px; color:var(--nw-muted); min-height:28px; }
+.nuyoah-workstation-header [data-nuyoah-workstation-panel][aria-selected="true"] { background:var(--nw-surface); color:var(--nw-text); box-shadow:0 1px 3px #0001; }
+.nuyoah-workstation-header .nuyoah-workstation-settings[open] .nuyoah-workstation-font-controls { background:var(--nw-surface); border-color:var(--nw-line); border-radius:12px; box-shadow:var(--nw-shadow); }
+:root #nuyoah-workstation-project-page .nuyoah-project-subnav { border-color:var(--nw-line); }
+:root #nuyoah-workstation-project-page .nuyoah-project-task:hover { background:var(--nw-soft); }
+:root #nuyoah-workstation-project-page .nuyoah-project-task[aria-current="true"] { background:var(--nw-selected); }
+:root #nuyoah-workstation-project-page :is(.nuyoah-work-card,.nuyoah-work-editor,.nuyoah-work-menu,.nuyoah-work-filters,.nuyoah-task-map-search-results) { border-color:var(--nw-line); border-radius:12px; }
+:root #nuyoah-workstation-project-page :is(.nuyoah-work-editor,.nuyoah-work-menu,.nuyoah-work-filters) { box-shadow:var(--nw-shadow); }
+/* Skills: quiet card boundaries, status/favourite semantics remain unchanged. */
+:root #codex-skill-organizer .codex-skill-row { border-color:var(--nw-line); border-radius:11px; background:var(--nw-surface); box-shadow:none; transition:background-color 140ms ease,border-color 140ms ease; }
+:root #codex-skill-organizer .codex-skill-row:hover { background:var(--nw-soft); border-color:color-mix(in srgb,var(--nw-text) 22%,var(--nw-surface)); box-shadow:none; }
+:root #codex-skill-organizer :is(.codex-skill-filter,.codex-skill-search) { border-radius:8px; border-color:var(--nw-line); }
+:root #codex-skill-organizer .codex-skill-filter[aria-pressed="true"] { background:var(--nw-selected); color:var(--nw-accent); border-color:transparent; }
+.codex-skill-context-menu { background:var(--nw-surface); border-color:var(--nw-line); border-radius:12px; box-shadow:var(--nw-shadow); }
+/* The same token source is imported by the two owned iframe applications. */
+.nw-frame {
+  --bg:var(--nw-base); --panel:var(--nw-surface); --sidebar:var(--nw-base); --text:var(--nw-text); --muted:var(--nw-muted); --border:var(--nw-line); --soft:var(--nw-selected);
+  --surface:var(--nw-surface); --surface-raised:var(--nw-surface); --surface-muted:var(--nw-soft); --surface-hover:var(--nw-soft); --surface-active:var(--nw-hover);
+  --text-primary:var(--nw-text); --text-secondary:var(--nw-muted); --card-shadow:none; --dialog-shadow:var(--nw-shadow);
+  --header-bg:var(--nw-base); --sidebar-bg:var(--nw-base); --column-header:var(--nw-base);
+  background:var(--nw-base);
+}
+.nw-frame :is(button,input,select,textarea) { border-radius:8px; }
+.nw-frame :is(.codex-live-card,.asset-thumb,.task-card) { border-radius:11px; box-shadow:none; }
+.nw-frame .codex-live-card { transition:background-color 140ms ease,border-color 140ms ease; }
+.nw-frame .codex-live-card:hover { border-color:color-mix(in srgb,var(--nw-text) 22%,var(--nw-surface)); }
+.nw-frame .codex-live-card.is-current { background:var(--nw-selected); box-shadow:inset 0 0 0 .5px var(--nw-accent); }
+.nw-frame .codex-live-card-main:active { scale:.99; }
+.nw-frame .codex-live-view-tabs { padding:3px; background:var(--nw-soft); border-radius:9px; }
+.nw-frame .codex-live-view-tabs > button { border-radius:7px; }
+.nw-frame .asset-thumb { transition:background-color 140ms ease,box-shadow 140ms ease,scale 140ms var(--nw-ease); }
+.nw-frame .asset-thumb:hover { box-shadow:0 0 0 2px var(--nw-line); }
+.nw-frame .asset-thumb:active { scale:.985; }
+.nw-frame .nav-item { border-radius:8px; }
+.nw-frame :is(dialog,.dialog,.modal,.header-project-menu) { border-color:var(--nw-line); border-radius:14px; box-shadow:var(--nw-shadow); }
+/* Entrance only on visibility changes, never on a polling refresh. */
+:is(#nuyoah-capsule-sidebar .nc-picker,#nuyoah-capsule-sidebar .nc-detail,.codex-skill-context-menu,.nuyoah-work-menu,.nuyoah-work-filters,.nuyoah-work-editor):not([hidden]),
+.nuyoah-workstation-settings[open] .nuyoah-workstation-font-controls,
+.nw-frame dialog[open] { animation:nw-pop-in 240ms var(--nw-ease); transform-origin:top center; }
+@keyframes nw-pop-in { from { opacity:0; transform:translateY(-5px) scale(.98); } to { opacity:1; transform:none; } }
+@media(prefers-reduced-motion:reduce) {
+  :is(#nuyoah-capsule-sidebar,#nuyoah-workstation-project-page,#codex-skill-organizer,#codex-taskboard-page,#codex-asset-console-page,.nw-frame,.codex-skill-context-menu) *,
+  [data-nw-indicator]::before { animation:none!important; transition:none!important; scroll-behavior:auto!important; }
+}
+
+/* Grid chrome only: native per-pane chats retain their own controls/styles. */
+#nuyoah-chat-grid .nuyoah-chat-grid-slot { border-radius:10px; border-color:var(--nw-line); }
+#nuyoah-chat-grid .nuyoah-chat-grid-slot[data-active=true] { border-color:var(--nw-accent); }
+#nuyoah-chat-grid :is(.nuyoah-chat-grid-toolbar,.nuyoah-chat-grid-slot-head) { background:var(--nw-base); border-color:var(--nw-line); }
+#nuyoah-chat-grid :is(.nuyoah-chat-grid-toolbar,.nuyoah-chat-grid-slot-head) button { border-radius:7px; }
+#nuyoah-chat-grid .nuyoah-chat-grid-swap:active { scale:1; }
+@media(prefers-reduced-motion:reduce) { #nuyoah-chat-grid :is(.nuyoah-chat-grid-toolbar,.nuyoah-chat-grid-slot-head) * { transition:none!important; } }
+/* Transforming a sticky popover can make browser focus scroll its ancestor.
+   Keep its geometry fixed; opacity still gives a continuous reveal. */
+:root #nuyoah-capsule-sidebar :is(.nc-picker,.nc-detail):not([hidden]) { animation-name:nw-fade-in; }
+@keyframes nw-fade-in { from { opacity:0; } to { opacity:1; } }
+/* Owned shell shortcuts and canvas cards follow the same quiet hierarchy. */
+:is(#nuyoah-workstation-entry,#nuyoah-chat-layout-entry,[data-nuyoah-app-shortcuts] > button) {
+  border-radius:9px; transition:background-color 140ms ease,border-color 140ms ease,scale 140ms var(--nw-ease);
+}
+:is(#nuyoah-workstation-entry,#nuyoah-chat-layout-entry,[data-nuyoah-app-shortcuts] > button):active { scale:.97; }
+:is(#nuyoah-workstation-entry,#nuyoah-chat-layout-entry):focus-visible { outline:2px solid var(--nw-accent); outline-offset:2px; }
+#nuyoah-workstation-project-page .nuyoah-work-canvas-node { border-radius:12px!important; box-shadow:0 1px 4px #0000000c; transition:border-color 140ms ease,box-shadow 140ms ease; }
+#nuyoah-workstation-project-page .nuyoah-work-canvas-node[data-activity="running"] { animation:none; box-shadow:0 0 0 1px color-mix(in srgb,var(--nw-accent) 35%,transparent); }
+#nuyoah-workstation-project-page .nuyoah-work-canvas-node[data-activity="running"]::after { animation:none; background:none; }
+@media(prefers-reduced-motion:reduce) {
+  :is(#nuyoah-workstation-entry,#nuyoah-chat-layout-entry,[data-nuyoah-app-shortcuts] > button) { transition:none!important; }
+}
+
+.nuyoah-workstation-header .nuyoah-workstation-tabs { width:fit-content; max-width:100%; justify-self:center; }
+:root #nuyoah-capsule-sidebar .nc-toolbar { border-radius:0; }
+:root #codex-skill-organizer .codex-skill-grid { grid-template-columns:repeat(auto-fit,minmax(min(100%,250px),1fr)); gap:10px; }
+:root #codex-skill-organizer .codex-skill-row { grid-template-columns:30px 30px minmax(0,1fr); align-items:start; gap:10px 6px; padding:13px; }
+:root #codex-skill-organizer .codex-skill-row > span:first-child { grid-column:1/-1; min-width:0; }
+:root #codex-skill-organizer .codex-skill-name { white-space:normal; display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; font-weight:550; line-height:1.4; }
+:root #codex-skill-organizer .codex-skill-description { color:var(--nw-muted); }
+:root #codex-skill-organizer .codex-skill-use { justify-self:end; align-self:center; background:var(--nw-selected); color:var(--nw-accent); font-size:calc(var(--nuyoah-workstation-font-size,17px) - 3px); }
+:root #codex-skill-organizer .codex-skill-more { grid-column:2; grid-row:2; }
+:root #codex-skill-organizer .codex-skill-use { grid-column:3; grid-row:2; }
+:root #codex-skill-organizer .codex-skill-filter { border-color:transparent; font-size:calc(var(--nuyoah-workstation-font-size,17px) - 2px); }
+:root #codex-skill-organizer .codex-skill-filter:hover { background:var(--nw-soft); }
+:root #codex-skill-organizer .codex-skill-label-notice { background:var(--nw-soft); border-color:var(--nw-line); }
+:root #codex-skill-organizer .codex-skill-label-generate { background:var(--nw-accent); color:var(--nw-surface); }
+#nuyoah-workstation-project-page .nuyoah-work-canvas-node[data-selected="true"] { outline:0; box-shadow:0 0 0 1px var(--nw-accent); }
+#nuyoah-workstation-project-page .nuyoah-work-canvas-node:focus-visible { outline:2px solid var(--nw-accent); outline-offset:3px; }

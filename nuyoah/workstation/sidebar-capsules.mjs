@@ -222,7 +222,7 @@ export function createCapsuleSidebar({ window: host, readSnapshot, readCurrent, 
       #${ROOT} .nc-picker{position:absolute;z-index:5;top:92px;left:4px;right:4px;border:1px solid var(--capsule-border);border-radius:12px;background:var(--color-token-main-surface-primary,Canvas);padding:8px;box-shadow:0 8px 26px color-mix(in srgb,CanvasText 12%,transparent)}
       #${ROOT} .nc-picker-list{max-height:260px;overflow-y:auto;overscroll-behavior:contain;margin-top:8px}
       #${ROOT} .nc-project-option{width:100%;display:block;padding:8px;font-size:13px;overflow-wrap:anywhere}#${ROOT} .nc-project-option:hover,#${ROOT} .nc-project-option[aria-pressed="true"]{background:var(--capsule-hover)}
-      #${ROOT} .nc-group-toggle{width:100%;display:flex;align-items:center;gap:8px;color:var(--capsule-sub);padding:16px 5px 8px;font-size:12px;line-height:18px}#${ROOT} .nc-group-toggle:hover{color:var(--capsule-text)}#${ROOT} .nc-group-arrow{margin-left:auto}
+      #${ROOT} .nc-group-toggle{width:100%;display:flex;align-items:center;gap:8px;color:var(--capsule-sub);padding:16px 5px 8px;font-size:12px;line-height:18px}#${ROOT} .nc-group-toggle:hover{color:var(--capsule-text)}#${ROOT} .nc-group-arrow{margin-left:auto;rotate:90deg}#${ROOT} .nc-group-toggle[aria-expanded="false"] .nc-group-arrow{rotate:0deg}
       #${ROOT} .nc-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:9px;align-items:stretch}
       #${ROOT} .nc-card{min-width:0;position:relative;display:flex;flex-direction:column;border:1px solid color-mix(in srgb,currentColor 10%,transparent);border-radius:15px;background:var(--capsule-surface);box-shadow:0 2px 4px rgb(0 0 0 / 9%),0 6px 14px rgb(0 0 0 / 7%);transition:background-color 120ms ease,border-color 120ms ease,box-shadow 120ms ease;}
       #${ROOT} .nc-card:hover{border-color:var(--capsule-border);box-shadow:0 3px 6px rgb(0 0 0 / 11%),0 8px 18px rgb(0 0 0 / 9%)}#${ROOT} .nc-card[data-selected="true"]{border-color:var(--capsule-sub);background:var(--capsule-surface);box-shadow:0 0 0 .5px var(--capsule-sub),0 3px 6px rgb(0 0 0 / 10%),0 7px 16px rgb(0 0 0 / 8%)}
@@ -463,6 +463,7 @@ export function createCapsuleSidebar({ window: host, readSnapshot, readCurrent, 
     const node = element('section'), toggle = button('', 'nc-group-toggle'), name = element('span', '', label);
     const total = element('span'), arrow = element('span', 'nc-group-arrow'), grid = element('div', 'nc-grid');
     grid.id = `${ROOT}-group-${groups.size}`; toggle.setAttribute('aria-controls', grid.id);
+    arrow.setAttribute('aria-hidden', 'true');
     toggle.append(name, total, arrow); node.append(toggle, grid);
     toggle.onclick = () => {
       const saved = projectPreference(), folded = new Set(Array.isArray(saved.folded) ? saved.folded : []);
@@ -489,8 +490,8 @@ export function createCapsuleSidebar({ window: host, readSnapshot, readCurrent, 
       const entries = taskEntries(label).filter(task => shownIds.has(key(task.hostId, task.threadId)));
       if (!entries.length) continue;
       const group = ensureGroup(label); text(group.total, String(entries.length));
-      attr(group.toggle, 'aria-expanded', !folded.has(label)); text(group.arrow, folded.has(label) ? '›' : '⌄');
-      hide(group.grid, folded.has(label));
+      attr(group.toggle, 'aria-expanded', !folded.has(label)); text(group.arrow, '›');
+      if (!host.__nuyoahInteractionTheme__?.setVisible(group.grid, !folded.has(label))) hide(group.grid, folded.has(label));
       reconcile(group.grid, entries.map(updateCard)); desired.push(group.node);
     }
     reconcile(groupsHost, desired);

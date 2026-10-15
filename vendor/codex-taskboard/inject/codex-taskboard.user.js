@@ -1109,7 +1109,8 @@
     if (status) status.hidden = true;
     if (frame) {
       frame.hidden = false;
-      frame.focus?.();
+      // Preserve an explicit selection in the host module navigation while loading.
+      if (!document.activeElement?.closest?.("[data-nuyoah-workstation-header]")) frame.focus?.();
     }
   }
 

@@ -38,7 +38,7 @@ test('map read errors return a scoped safe failure instead of dropping the injec
 test('production injection retains task action memory before the outer UI teardown', () => {
   const from = source.indexOf('const rendererSource = '), to = source.indexOf(';\n', from) + 1;
   const generated = vm.runInNewContext(`${source.slice(from, to)}\nrendererSource;`, {
-    workstationConfig: {}, projectSource: '', taskContextSource: '', workCanvasSource: '', workItemsSource: '', taskActionTransportSource: '', remoteSource: '', multiChatSource: '', autoMetadataSource: '', magpieSource: '', appShortcutsSource: '',
+    workstationConfig: {}, projectSource: '', taskContextSource: '', workCanvasSource: '', workItemsSource: '', taskActionTransportSource: '', remoteSource: '', multiChatSource: '', autoMetadataSource: '', magpieSource: '', appShortcutsSource: '', interactionSource: '',
     userSource: 'window.__codexConversationPreviewInjection__.destroy();', taskMapSource: '',
     createNativeTaskMapAdapter: function () { return {}; }, createSkillTimeline: function () { return {}; },
     createSkillClassification: function () { return { labels: [], categoryFor: () => '未分类' }; },

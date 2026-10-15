@@ -2,6 +2,8 @@ import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import { createServer } from 'node:http';
 import test from 'node:test';
+import { createInteractionTheme } from '../nuyoah/workstation/interaction-motion.mjs';
+const interactionCSS = await readFile(new URL('../nuyoah/workstation/interaction-theme.css', import.meta.url), 'utf8');
 const source = await readFile(new URL('../inject/conversation-preview.user.js', import.meta.url), 'utf8');
 const vendor = await readFile(new URL('../vendor/codex-taskboard/inject/codex-taskboard.user.js', import.meta.url), 'utf8');
 
@@ -36,6 +38,7 @@ test('workstation and the modern native pane resize together and restore their s
       window.electronBridge={getSharedObjectSnapshotValue:()=>[],getInitialSidebarBootstrap:()=>({catalogEntries:[]}),sendMessageFromView:()=>{}};
     });
     await page.addScriptTag({content:vendor});await page.addScriptTag({content:source});
+    await page.evaluate(`window.__nuyoahInteractionTheme__=(${createInteractionTheme.toString()})({window,css:${JSON.stringify(interactionCSS)}});`);
     const panel=()=>page.locator('[data-nuyoah-panel-layout="docked"]:visible');
     const native=page.locator('#native-pane');
     const measure=()=>page.evaluate(()=>{
@@ -58,6 +61,16 @@ test('workstation and the modern native pane resize together and restore their s
       assert.equal(m.nativePreference,'1122px');return m;
     }
     await assertFit();await page.locator('#native-action').click();assert.equal(await page.evaluate(()=>window.nativeActions),1);
+    const activeTab = page.locator('.nuyoah-workstation-header:visible [role=tab][aria-selected=true]');
+    await activeTab.focus(); await page.keyboard.press('ArrowRight');
+    await page.waitForFunction(()=>document.activeElement?.dataset.nuyoahWorkstationPanel==='taskboard');
+    assert.equal(await activeTab.getAttribute('data-nuyoah-workstation-panel'),'taskboard');
+    await page.keyboard.press('Home');
+    await page.waitForFunction(()=>document.activeElement?.dataset.nuyoahWorkstationPanel==='project');
+    assert.equal(await activeTab.getAttribute('tabindex'),'0');
+    await page.waitForFunction(()=>{const group=document.querySelector('[data-nuyoah-workstation-header="project"] .nuyoah-workstation-tabs'); const selected=group?.querySelector('[aria-selected="true"]');return selected && parseFloat(group.style.getPropertyValue('--nw-tab-x'))===selected.offsetLeft;});
+    assert.equal(await page.locator('#native-action').evaluate(n=>getComputedStyle(n).transitionDuration),'0s');
+
     for (const module of ['taskboard','skills','asset','project']) {
       await page.evaluate(module=>window.__codexConversationPreviewInjection__.openWorkstationPanel(module),module);
       await panel().waitFor();await page.waitForFunction(()=>document.getElementById('native-pane').hasAttribute('data-nuyoah-native-panel-adaptive'));

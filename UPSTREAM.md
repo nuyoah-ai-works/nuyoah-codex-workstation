@@ -175,3 +175,8 @@ values. The Taskboard manifest keeps its upstream version, ref and baseCommit;
 its local task provenance is represented by the existing non-private snapshot ref.
 The macOS and Windows installers default to this public repository. Upstream
 licenses and font notices are retained.
+
+## Shared interaction presentation — 0.35.3
+
+- The Taskboard web entry explicitly imports the Nuyoah shared CSS and presentation adapter; upstream task data and execution logic are unchanged. The host-frame focus handoff preserves an explicit selection in the Workstation module header while loading. Sidebar and host injection use the same source, and the asset server/bridge whitelist the two public presentation files.
+- Visual/motion mechanisms were informed by `yetone/magpie` at `01c41e8ba2aad586ec885c92bc4b959a49005eda`; this implementation is authored locally, without importing Magpie source, branding or assets.
