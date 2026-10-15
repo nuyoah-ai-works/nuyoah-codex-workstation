@@ -23,6 +23,10 @@ import { readArchivedThreadIds } from "../lib/thread-archive-state.mjs";
 import { readUnarchivedCodexThreads } from "../lib/codex-thread-catalog.mjs";
 import { createChatGptCatalog } from "../nuyoah/taskboard/chatgpt-catalog.mjs";
 import { createRemoteTaskCatalog } from "../nuyoah/taskboard/remote-catalog.mjs";
+import { createMagpieQuotaService, selectCodexQuota } from '../nuyoah/workstation/magpie-quota.mjs';
+import { createAppShortcuts, openGrokBot, readGrokBotIcon } from '../nuyoah/workstation/app-shortcuts.mjs';
+import { createMagpieQuotaUI } from '../nuyoah/workstation/magpie-quota-ui.mjs';
+const magpieQuota = createMagpieQuotaService();
 import { createCapsuleSidebar } from "../nuyoah/workstation/sidebar-capsules.mjs";
 
 import { TaskContextStore, handleTaskContextRequest } from '../nuyoah/workstation/task-context-store.mjs';
@@ -249,7 +253,9 @@ async function attach() {
   const autoMetadataSource = `window.__nuyoahAutoThreadMetadata__?.destroy?.();
     window.__nuyoahAutoThreadMetadata__ = (${createAutoThreadMetadata.toString()})({ window, adapter: window.__nuyoahNativeTaskAdapter__ });
     void window.__nuyoahAutoThreadMetadata__.start();`;
-  const rendererSource = `if (window.top === window) { window.__NUYOAH_WORKSTATION_CONFIG__ = ${JSON.stringify(workstationConfig)}; window.__nuyoahCreateCapsuleSidebar__ = ${createCapsuleSidebar.toString()}; window.__nuyoahSkillClassification__ = (${createSkillClassification.toString()})(); ${projectSource}\n${taskContextSource}\nwindow.__nuyoahTaskMapUI__?.retainActions?.();\n${userSource}\n${workCanvasSource}\nwindow.__nuyoahNativeTaskAdapter__ = (${createNativeTaskMapAdapter.toString()})({ window });\n${taskActionTransportSource}\n${taskMapSource}\n${workItemsSource}\nwindow.__nuyoahSkillTimeline__?.destroy?.(); window.__nuyoahSkillTimeline__ = (${createSkillTimeline.toString()})({ window, document });\n${remoteSource}\n${multiChatSource}\n${autoMetadataSource}\n}`;
+  const magpieSource = `window.__nuyoahMagpieQuota__?.destroy?.(); window.__nuyoahMagpieQuota__ = (${createMagpieQuotaUI.toString()})({ window, selectCodex: ${selectCodexQuota.toString()} });`;
+  const appShortcutsSource = `window.__nuyoahAppShortcuts__?.destroy?.(); window.__nuyoahAppShortcuts__ = (${createAppShortcuts.toString()})({ window, iconUrl: ${JSON.stringify(await readGrokBotIcon())} });`;
+  const rendererSource = `if (window.top === window) { window.__NUYOAH_WORKSTATION_CONFIG__ = ${JSON.stringify(workstationConfig)}; window.__nuyoahCreateCapsuleSidebar__ = ${createCapsuleSidebar.toString()}; window.__nuyoahSkillClassification__ = (${createSkillClassification.toString()})(); ${projectSource}\n${taskContextSource}\nwindow.__nuyoahTaskMapUI__?.retainActions?.();\n${userSource}\n${workCanvasSource}\nwindow.__nuyoahNativeTaskAdapter__ = (${createNativeTaskMapAdapter.toString()})({ window });\n${taskActionTransportSource}\n${taskMapSource}\n${workItemsSource}\nwindow.__nuyoahSkillTimeline__?.destroy?.(); window.__nuyoahSkillTimeline__ = (${createSkillTimeline.toString()})({ window, document });\n${remoteSource}\n${multiChatSource}\n${autoMetadataSource}\n${magpieSource}\n${appShortcutsSource}\n}`;
   const registered = await client.send("Page.addScriptToEvaluateOnNewDocument", { source: rendererSource });
   registeredScriptIdentifier = registered.identifier;
   await client.evaluate(rendererSource);
@@ -304,6 +310,18 @@ async function processTaskContextRequest(request, owner = client, revision = ren
     : await handleTaskContextRequest(taskContextStore, request, coldHistory, tokenSmart, automaticReferences);
   const receiver = request.consumer === 'timeline' ? '__nuyoahSkillTimeline__' : '__nuyoahTaskContextUI__';
   if (isCurrentRenderer(owner, revision)) await owner.evaluate(`window.${receiver}?.receive?.(${JSON.stringify(response)})`);
+}
+
+async function processAppShortcutRequest(request, owner = client, revision = rendererRevision) {
+  if (!isCurrentRenderer(owner, revision) || !Number.isSafeInteger(request?.id)) return;
+  const result = await openGrokBot();
+  if (isCurrentRenderer(owner, revision)) await owner.evaluate(`window.__nuyoahAppShortcuts__?.receive?.(${JSON.stringify({ id: request.id, ...result })})`);
+}
+
+async function processMagpieRequest(request, owner = client, revision = rendererRevision) {
+  if (!isCurrentRenderer(owner, revision) || !Number.isSafeInteger(request?.id) || !['read', 'open'].includes(request.action)) return;
+  const data = await magpieQuota[request.action === 'open' ? 'open' : 'read']();
+  if (isCurrentRenderer(owner, revision)) await owner.evaluate(`window.__nuyoahMagpieQuota__?.receive?.(${JSON.stringify({ id: request.id, data })})`);
 }
 
 async function processWorkItemsRequest(request, owner = client, revision = rendererRevision) {
@@ -449,7 +467,7 @@ async function pushPreviews(owner = client, revision = rendererRevision) {
 async function pumpRequests() {
   const owner = client, revision = rendererRevision;
   if (!isCurrentRenderer(owner, revision)) return false;
-  const ready = Object.fromEntries(['skills', 'context', 'work', 'map'].map(name => [name, !scheduler.busy(name)]));
+  const ready = Object.fromEntries(['skills', 'context', 'work', 'map', 'magpie', 'apps'].map(name => [name, !scheduler.busy(name)]));
   ready.action = activeActionRequests.size < 4;
   const packet = await owner.evaluate(`(() => {
     const ready = ${JSON.stringify(ready)}, api = window.__codexConversationPreviewInjection__;
@@ -462,12 +480,14 @@ async function pumpRequests() {
       work: ready.work ? window.__nuyoahWorkItemsUI__?.takeRequest?.() : null,
       map: request ? { request, tasks: tasks.slice(0, 4096).map(({ hostId, threadId, title, projectId, projectName, runtimeStatus, parentThreadId, forkedFromId, archived }) =>
         ({ hostId, threadId, title, projectId, projectName, runtimeStatus, parentThreadId, forkedFromId, archived })) } : null,
+      apps: ready.apps ? window.__nuyoahAppShortcuts__?.takeRequest?.() : null,
+      magpie: ready.magpie ? window.__nuyoahMagpieQuota__?.takeRequest?.() : null,
       action: ready.action ? window.__nuyoahTaskActionTransport__?.takeRequest?.() : null,
     };
   })()`);
   if (!isCurrentRenderer(owner, revision)) return false;
   for (const [name, handler] of Object.entries({ skills: processSkillLabelRequest, context: processTaskContextRequest,
-    work: processWorkItemsRequest, map: processTaskMapRequest })) {
+    work: processWorkItemsRequest, map: processTaskMapRequest, magpie: processMagpieRequest, apps: processAppShortcutRequest })) {
     if (packet[name]) void scheduler.run(name, () => handler(packet[name], owner, revision));
   }
   if (packet.action) await processTaskActionRequest(packet.action, owner, revision);

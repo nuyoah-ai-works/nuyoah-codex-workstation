@@ -6677,6 +6677,10 @@
     window.removeEventListener("message", handleWorkspacePanelMessage);
     closeStatusMenu();
     document.getElementById(STYLE_ID)?.remove();
+    window.__nuyoahAppShortcuts__?.destroy?.();
+    window.__nuyoahAppShortcuts__ = null;
+    window.__nuyoahMagpieQuota__?.destroy?.();
+    window.__nuyoahMagpieQuota__ = null;
     document.getElementById(WORKSTATION_ENTRY_ID)?.remove();
     document.documentElement.style.removeProperty("--nuyoah-workstation-font-size");
     document.getElementById(TOGGLE_ID)?.remove();

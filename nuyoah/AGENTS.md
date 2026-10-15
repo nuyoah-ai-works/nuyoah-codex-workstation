@@ -4,6 +4,14 @@ This directory contains only Nuyoah-specific adapters that are not part of the
 imported upstream behavior. Keep adapters small, independently testable and
 called through explicit upstream entry points.
 
+- `workstation/magpie-*`: read only the local Magpie quota endpoint, with bounded
+  responses and field projection. Keep quota/account labels in memory, never log
+  or persist them; never read credential files. Opening the installed Magpie app
+  requires an explicit click and does not switch, add or modify accounts.
+- `workstation/app-shortcuts.mjs`: a user-clicked Grok Bot shortcut beside the
+  native Orbit row. Preserve native nodes and unread state; launch only the
+  verified installed bundle identity, never renderer-supplied commands or paths.
+
 - `skills/`: use local Codex `app-server` `skills/list` as authority, preserve
   personal Skill symlink semantics, and generate/cache user-confirmed Chinese
   card titles and 30-60 character Chinese summaries from only the admitted name

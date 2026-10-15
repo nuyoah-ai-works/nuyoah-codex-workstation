@@ -13,7 +13,7 @@ function setup(request, tasks, read = async () => ({ status: 'ready', nodes: [],
   const window = { __nuyoahTaskMapUI__: { takeRequest: () => { const next = request; request = null; return next; }, receive: data => received.push(data) },
     __codexConversationPreviewInjection__: { getTaskboardSnapshot: () => ({ tasks }) } };
   const scheduler = createInjectorScheduler({ onError: (name, error) => { throw error; } });
-  const context = { scheduler, rendererRevision: 1, isCurrentRenderer: (owner, revision) => revision === context.rendererRevision && owner === context.client, processSkillLabelRequest() {}, processTaskContextRequest() {}, processWorkItemsRequest() {}, client: { evaluate: script => vm.runInNewContext(script, { window, document: { visibilityState: 'visible' } }) }, attachedTargetId: 'fictional-target',
+  const context = { scheduler, rendererRevision: 1, isCurrentRenderer: (owner, revision) => revision === context.rendererRevision && owner === context.client, processSkillLabelRequest() {}, processTaskContextRequest() {}, processWorkItemsRequest() {}, processMagpieRequest() {}, processAppShortcutRequest() {}, client: { evaluate: script => vm.runInNewContext(script, { window, document: { visibilityState: 'visible' } }) }, attachedTargetId: 'fictional-target',
     taskRelations: { view: async params => { calls.push(params); return read(params); } } };
   const run = vm.runInNewContext(`${bridge}\n${pump}\npumpRequests;`, context);
   return { run: async () => { await run(); await scheduler.settle(); }, pump: run, scheduler, context, calls, received };
@@ -38,7 +38,7 @@ test('map read errors return a scoped safe failure instead of dropping the injec
 test('production injection retains task action memory before the outer UI teardown', () => {
   const from = source.indexOf('const rendererSource = '), to = source.indexOf(';\n', from) + 1;
   const generated = vm.runInNewContext(`${source.slice(from, to)}\nrendererSource;`, {
-    workstationConfig: {}, projectSource: '', taskContextSource: '', workCanvasSource: '', workItemsSource: '', taskActionTransportSource: '', remoteSource: '', multiChatSource: '', autoMetadataSource: '',
+    workstationConfig: {}, projectSource: '', taskContextSource: '', workCanvasSource: '', workItemsSource: '', taskActionTransportSource: '', remoteSource: '', multiChatSource: '', autoMetadataSource: '', magpieSource: '', appShortcutsSource: '',
     userSource: 'window.__codexConversationPreviewInjection__.destroy();', taskMapSource: '',
     createNativeTaskMapAdapter: function () { return {}; }, createSkillTimeline: function () { return {}; },
     createSkillClassification: function () { return { labels: [], categoryFor: () => '未分类' }; },
